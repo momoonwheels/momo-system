@@ -10,7 +10,7 @@ import EmptyState from '@/components/ui/EmptyState'
 import { ShoppingCart } from 'lucide-react'
 
 export default function OrderListPage() {
-  const [locationId, setLocationId] = useState('')
+  const [locationId, setLocationId] = useState('NEWPORT')
   const [weekStart, setWeekStart] = useState(format(startOfWeek(new Date(),{weekStartsOn:1}),'yyyy-MM-dd'))
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
@@ -26,7 +26,7 @@ export default function OrderListPage() {
     setLoading(false)
   }, [locationId, weekStart])
 
-  useEffect(() => { load() }, [locationId, weekStart])
+  useEffect(() => { load() }, [load])
 
   // Group lines by category
   const lines = data?.lines || []
