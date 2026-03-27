@@ -16,9 +16,12 @@ export default function OrderListPage() {
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
-    if (!locationId || !weekStart) return
+    if (!weekStart) return
     setLoading(true)
-    const res = await fetch(`/api/order-list?location_id=${locationId}&week_start=${weekStart}`)
+    const url = locationId === 'NEWPORT'
+      ? `/api/order-list?combined=true&week_start=${weekStart}`
+      : `/api/order-list?location_id=${locationId}&week_start=${weekStart}`
+    const res = await fetch(url)
     setData(await res.json())
     setLoading(false)
   }, [locationId, weekStart])
@@ -50,7 +53,14 @@ export default function OrderListPage() {
         }
       />
       <div className="flex items-center gap-4 mb-6">
-        <LocationSelector onChange={setLocationId} />
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">📍</span>
+          <select
+            onChange={e => setLocationId(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-500">
+            <option value="NEWPORT">Newport (Combined — All Trucks)</option>
+          </select>
+        </div>
         <WeekSelector onChange={setWeekStart} />
       </div>
       {loading ? <LoadingSpinner /> : !data ? (
