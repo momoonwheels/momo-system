@@ -83,9 +83,9 @@ export default function OrderListPage() {
                           <div className="text-sm font-medium text-gray-800">{ing?.name||line.code}</div>
                           <div className="text-xs text-gray-400">{line.code}</div>
                         </td>
-                        <td className="px-4 py-2.5 text-center text-sm text-gray-600">{line.needed.toFixed(1)} <span className="text-xs text-gray-400">{ing?.recipe_unit}</span></td>
-                        <td className="px-4 py-2.5 text-center text-sm text-gray-600">{line.onHand.toFixed(1)}</td>
-                        <td className="px-4 py-2.5 text-center text-sm text-gray-600">{line.netNeeded.toFixed(1)}</td>
+                        <td className="px-4 py-2.5 text-center text-sm text-gray-600">{(Number(line.needed)||0).toFixed(1)} <span className="text-xs text-gray-400">{ing?.recipe_unit}</span></td>
+                        <td className="px-4 py-2.5 text-center text-sm text-gray-600">{(Number(line.onHand)||0).toFixed(1)}</td>
+                        <td className="px-4 py-2.5 text-center text-sm text-gray-600">{(Number(line.netNeeded)||0).toFixed(1)}</td>
                         <td className="px-4 py-2.5 text-xs text-gray-500">{ing?.vendor_unit_desc}</td>
                         <td className="px-4 py-2.5 text-center">
                           {line.unitsToBuy > 0 ? (
