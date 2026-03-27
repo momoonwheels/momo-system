@@ -22,9 +22,10 @@ export default function RecipeMatrixPage() {
 
   useEffect(() => {
     fetch('/api/recipe-matrix').then(r=>r.json()).then(data => {
-      setItems(data)
+      const rows = Array.isArray(data) ? data : []
+      setItems(rows)
       const e: Record<string,Record<string,number>> = {}
-      for (const row of data) {
+      for (const row of rows) {
         const code = row.ingredients?.code
         if (!code) continue
         if (!e[code]) e[code] = {}
@@ -32,7 +33,7 @@ export default function RecipeMatrixPage() {
       }
       setEdits(e)
       setLoading(false)
-    })
+    }).catch(() => setLoading(false))
   }, [])
 
   const save = async () => {
