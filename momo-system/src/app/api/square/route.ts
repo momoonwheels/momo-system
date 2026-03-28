@@ -171,7 +171,7 @@ export async function GET(req: NextRequest) {
       let cursor: string | undefined
 
       do {
-        const url = `/payouts?begin_time=${startDate}T00:00:00-07:00&end_time=${endDate}T23:59:59-07:00&limit=100${cursor ? `&cursor=${cursor}` : ''}`
+        const url = `/payouts?begin_time=${startDate}T07:00:00.000Z&end_time=${endDate}T07:00:00.000Z&limit=100`&cursor=${cursor}` : ''}`
         const payoutsRes = await squareFetch(url)
         
         for (const payout of payoutsRes.payouts || []) {
@@ -207,7 +207,7 @@ export async function GET(req: NextRequest) {
     try {
       let processingFees = 0
       const payoutsRes = await squareFetch(
-        `/payouts?begin_time=${startDate}T00:00:00-07:00&end_time=${endDate}T23:59:59-07:00&limit=100`
+        `/payouts?begin_time=${startDate}T07:00:00.000Z&end_time=${endDate}T07:00:00.000Z&limit=100`
       )
       for (const payout of payoutsRes.payouts || []) {
         try {
@@ -231,7 +231,7 @@ export async function GET(req: NextRequest) {
     const endDate = searchParams.get('end_date') || '2026-03-22'
     try {
       const payoutsRes = await squareFetch(
-        `/payouts?begin_time=${startDate}T07:00:00Z&end_time=${endDate}T07:00:00Z&limit=10`
+        `/payouts?begin_time=${startDate}T07:00:00.000Z&end_time=${endDate}T07:00:00.000Z&limit=100`
       )
       const details: any[] = []
       for (const payout of (payoutsRes.payouts || []).slice(0,3)) {
