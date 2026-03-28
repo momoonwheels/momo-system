@@ -92,6 +92,7 @@ export default function ConfigPage() {
                 ))}
               </tbody>
             </table>
+          </div>
           </Card>
         ))}
       </div>
