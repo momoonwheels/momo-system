@@ -22,10 +22,17 @@ export default function OrderListPage() {
     const res = await fetch(`/api/order-list?combined=true&week_start=${weekStart}`)
     const json = await res.json()
     setData(json)
-    // Initialize on-hand from existing inventory
+    // Initialize on-hand from ingredients inventory (not lines, which may be empty)
     const oh: Record<string,number> = {}
-    for (const line of json?.lines || []) {
-      oh[line.code] = Number(line.onHand) || 0
+    for (const ing of json?.ingredients || []) {
+      // onHand from API is in recipe units, convert back to vendor units
+      const line = (json?.lines || []).find((l: any) => l.code === ing.code)
+      if (line) {
+        const conv = Number(line.convFactor) || 1
+        oh[ing.code] = conv > 0 ? (Number(line.onHand) || 0) / conv : 0
+      } else {
+        oh[ing.code] = 0
+      }
     }
     setOnHand(oh)
     setLoading(false)
