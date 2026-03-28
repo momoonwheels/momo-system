@@ -78,17 +78,21 @@ export async function GET(req: NextRequest) {
       let orderCount = allOrders.length
 
       for (const order of allOrders) {
-        // Gross = all line items before discounts
+        // Gross sales = sum of line items base prices before discounts
         for (const item of order.line_items || []) {
           grossSales += (item.gross_sales_money?.amount || 0) / 100
-          discountTotal += (item.total_discount_money?.amount || 0) / 100
           taxTotal += (item.total_tax_money?.amount || 0) / 100
         }
+        // Discounts at order level
+        discountTotal += (order.total_discount_money?.amount || 0) / 100
         tipTotal += (order.total_tip_money?.amount || 0) / 100
-        refunds += (order.total_money?.amount || 0) < 0 
-          ? Math.abs((order.total_money?.amount || 0)) / 100 : 0
+        // Returns/refunds
+        if ((order.total_money?.amount || 0) < 0) {
+          refunds += Math.abs((order.total_money?.amount || 0)) / 100
+        }
       }
 
+      // Net sales = Gross - Discounts - Tax (matching Square's formula)
       const netSales = grossSales - discountTotal - taxTotal
 
       return NextResponse.json({
@@ -110,43 +114,46 @@ export async function GET(req: NextRequest) {
     const startDate = searchParams.get('start_date')
     const endDate = searchParams.get('end_date')
     try {
-      // Square Payroll API - get payroll runs
-      const payrollRes = await fetch('https://connect.squareup.com/v2/payroll/payrolls', {
-        headers: {
-          'Authorization': `Bearer ${TOKEN}`,
-          'Square-Version': '2024-01-18'
-        }
-      })
-      
-      let totalLaborCost = 0
-      
-      if (payrollRes.ok) {
-        const data = await payrollRes.json()
-        for (const payroll of data.payrolls || []) {
-          const periodStart = payroll.pay_period?.start_date
-          const periodEnd = payroll.pay_period?.end_date
-          // Check if payroll period overlaps with our date range
-          if (periodEnd >= startDate! && periodStart <= endDate!) {
-            totalLaborCost += (payroll.net_pay_amount?.amount || 0) / 100
-          }
-        }
-      } else {
-        // Fallback: use labor shifts
-        const shiftsRes = await squareFetch(
-          `/labor/shifts?start_at=${startDate}T00:00:00Z&end_at=${endDate}T23:59:59Z&limit=200`
-        )
-        for (const shift of shiftsRes.shifts || []) {
-          const hourlyRate = (shift.wage?.hourly_rate?.amount || 0) / 100
-          if (shift.start_at && shift.end_at) {
-            const hours = (new Date(shift.end_at).getTime() - new Date(shift.start_at).getTime()) / (1000 * 60 * 60)
-            totalLaborCost += hours * hourlyRate
-          }
+      // Use Labor Shifts API (timecards) - same data as Square Timecards page
+      const shiftsRes = await squareFetch(
+        `/labor/shifts?start_at=${startDate}T00:00:00-07:00&end_at=${endDate}T23:59:59-07:00&limit=200`
+      )
+
+      let totalWages = 0
+      let totalHours = 0
+      const shiftDetails: any[] = []
+
+      for (const shift of shiftsRes.shifts || []) {
+        const hourlyRate = (shift.wage?.hourly_rate?.amount || 0) / 100
+        if (shift.start_at && shift.end_at) {
+          const hours = (new Date(shift.end_at).getTime() - new Date(shift.start_at).getTime()) / (1000 * 60 * 60)
+          totalHours += hours
+          totalWages += hours * hourlyRate
+          shiftDetails.push({
+            employee_id: shift.employee_id,
+            hours: hours.toFixed(2),
+            rate: hourlyRate,
+            wage: (hours * hourlyRate).toFixed(2),
+            date: shift.start_at?.split('T')[0]
+          })
         }
       }
 
-      return NextResponse.json({ totalLaborCost })
+      // Add estimated payroll taxes (7.65% employer FICA)
+      const payrollTaxRate = 0.0765
+      const estimatedTaxes = totalWages * payrollTaxRate
+      const totalLaborCost = totalWages + estimatedTaxes
+
+      return NextResponse.json({
+        totalWages,
+        estimatedTaxes,
+        totalLaborCost,
+        totalHours,
+        shiftDetails,
+        taxRate: payrollTaxRate
+      })
     } catch(e) {
-      return NextResponse.json({ totalLaborCost: 0, error: String(e) })
+      return NextResponse.json({ totalLaborCost: 0, totalWages: 0, totalHours: 0, error: String(e) })
     }
   }
 
