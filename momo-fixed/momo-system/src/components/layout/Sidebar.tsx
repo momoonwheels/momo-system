@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ClipboardList, Package, ShoppingCart,
-  Truck, Receipt, Settings, BookOpen, UtensilsCrossed
+  Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users
 } from 'lucide-react'
 
 const nav = [
@@ -15,6 +15,7 @@ const nav = [
   { href: '/receipts',        icon: Receipt,          label: 'Receipts & COGS' },
   { href: '/recipe-matrix',   icon: BookOpen,         label: 'Recipe Matrix'   },
   { href: '/config',          icon: Settings,         label: 'Configuration'   },
+  { href: '/users',           icon: Users,            label: 'Users'           },
 ]
 
 export default function Sidebar() {
