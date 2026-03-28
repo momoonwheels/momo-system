@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ClipboardList, Package, ShoppingCart,
   Truck, Receipt, Settings, BookOpen, UtensilsCrossed,
-  Users, TrendingUp, LogOut, X
+  Users, TrendingUp, LogOut, X, FileText
 } from 'lucide-react'
 
 const nav = [
@@ -18,6 +18,7 @@ const nav = [
   { href: '/config',           icon: Settings,        label: 'Configuration'    },
   { href: '/users',            icon: Users,           label: 'Users'            },
   { href: '/income-statement', icon: TrendingUp,      label: 'Income Statement' },
+  { href: '/weekly-report',    icon: FileText,        label: 'Weekly Report'    },
 ]
 
 export default function Sidebar({ onClose }: { onClose?: () => void }) {
