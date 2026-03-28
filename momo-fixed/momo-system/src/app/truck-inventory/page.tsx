@@ -283,6 +283,7 @@ export default function TruckInventoryPage() {
                       })}
                     </tbody>
                   </table>
+                </div>
                 </Card>
               ))}
 
@@ -367,6 +368,7 @@ export default function TruckInventoryPage() {
                       })}
                     </tbody>
                   </table>
+                </div>
                 </Card>
               ))}
 
@@ -432,6 +434,7 @@ export default function TruckInventoryPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
                 </Card>
               ))}
             </div>
