@@ -22,8 +22,16 @@ async function squareFetch(path: string, options: any = {}) {
   return res.json()
 }
 
+// America/Los_Angeles is UTC-7 in PDT (Mar-Nov), UTC-8 in PST (Nov-Mar)
+// Using UTC-7 (PDT) for March dates
 function toRFC3339Start(date: string) { return `${date}T07:00:00.000Z` }
-function toRFC3339End(date: string) { return `${date}T06:59:59.999Z` }
+function toRFC3339End(date: string) { 
+  // End of day PT = next day 06:59:59 UTC
+  const d = new Date(date + 'T00:00:00Z')
+  d.setDate(d.getDate() + 1)
+  const next = d.toISOString().split('T')[0]
+  return `${next}T06:59:59.999Z`
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -95,7 +103,14 @@ export async function GET(req: NextRequest) {
       }
 
       const netSales = grossSales - discountTotal - taxTotal
-      return NextResponse.json({ grossSales, discountTotal, taxTotal, tipTotal, refunds, netSales, orderCount })
+      return NextResponse.json({ 
+        grossSales, discountTotal, taxTotal, tipTotal, refunds, netSales, orderCount,
+        debug: { 
+          startAt: toRFC3339Start(startDate),
+          endAt: toRFC3339End(endDate),
+          totalOrders: allOrders.length
+        }
+      })
     } catch(e) {
       return NextResponse.json({ grossSales:0, netSales:0, tipTotal:0, refunds:0, discountTotal:0, orderCount:0, error: String(e) })
     }
