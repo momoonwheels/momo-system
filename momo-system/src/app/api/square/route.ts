@@ -127,18 +127,45 @@ export async function GET(req: NextRequest) {
   // ── LOANS (Square Capital) ────────────────────────────────────────
   if (action === 'loans') {
     try {
-      const payoutsUrl = `/payouts?begin_time=${toRFC3339Start(startDate)}&end_time=${toRFC3339End(endDate)}&limit=100`
-      const payoutsRes = await squareFetch(payoutsUrl)
+      // Try Square Capital API first
+      const capitalRes = await squareFetch('/capital/financing-summaries')
       let loanRepayment = 0
 
-      for (const payout of payoutsRes.payouts || []) {
-        const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
-        for (const entry of entriesRes.payout_entries || []) {
-          if (entry.type === 'SQUARE_CAPITAL_PAYMENT') {
-            loanRepayment += Math.abs((entry.amount_money?.amount || 0) / 100)
+      if (capitalRes.financing_summaries) {
+        for (const summary of capitalRes.financing_summaries) {
+          // Get payments within date range from activities
+          const activitiesRes = await squareFetch(
+            `/capital/financing-summaries/${summary.financing_program_id}/activities?begin_time=${toRFC3339Start(startDate)}&end_time=${toRFC3339End(endDate)}`
+          )
+          for (const activity of activitiesRes.activities || []) {
+            if (activity.type === 'PAYMENT') {
+              loanRepayment += Math.abs((activity.amount_money?.amount || 0) / 100)
+            }
           }
         }
       }
+
+      // Fallback: count SQUARE_CAPITAL_PAYMENT entries in payouts
+      // Each entry = one transaction's loan deduction
+      if (loanRepayment === 0) {
+        const payoutsUrl = `/payouts?begin_time=${toRFC3339Start(startDate)}&end_time=${toRFC3339End(endDate)}&limit=100`
+        const payoutsRes = await squareFetch(payoutsUrl)
+        let capitalEntryCount = 0
+
+        for (const payout of payoutsRes.payouts || []) {
+          const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
+          for (const entry of entriesRes.payout_entries || []) {
+            if (entry.type === 'SQUARE_CAPITAL_PAYMENT') {
+              capitalEntryCount++
+              // The loan deduction per transaction is proportional
+              // Each SQUARE_CAPITAL_PAYMENT entry = one sale that had loan deducted
+              // We need the actual amount from gross_amount_money
+              loanRepayment += Math.abs((entry.gross_amount_money?.amount || entry.amount_money?.amount || 0) / 100)
+            }
+          }
+        }
+      }
+
       return NextResponse.json({ loanRepayment })
     } catch(e) {
       return NextResponse.json({ loanRepayment: 0, error: String(e) })
@@ -164,6 +191,29 @@ export async function GET(req: NextRequest) {
     } catch(e) {
       return NextResponse.json({ processingFees: 0, error: String(e) })
     }
+  }
+
+  // ── PAYROLL DEBUG - test multiple endpoints ──────────────────────
+  if (action === 'payroll-debug') {
+    const results: any = {}
+    const endpoints = [
+      '/payroll/payrolls',
+      '/payroll/payrolls?status=FINALIZED',
+      '/v2/payroll/payrolls',
+      '/team/v2/jobs',
+    ]
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(`${SQUARE_BASE}${ep}`, {
+          headers: { 'Authorization': `Bearer ${TOKEN}`, 'Square-Version': '2024-01-18' }
+        })
+        const text = await res.text()
+        results[ep] = { status: res.status, body: text.substring(0, 300) }
+      } catch(e) {
+        results[ep] = { error: String(e) }
+      }
+    }
+    return NextResponse.json(results)
   }
 
   // ── DEBUG ─────────────────────────────────────────────────────────
