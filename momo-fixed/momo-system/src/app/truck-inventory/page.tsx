@@ -160,14 +160,9 @@ export default function TruckInventoryPage() {
     return acc
   }, {})
 
-  const tabBtn = (t: Tab, icon: React.ReactNode, label: string) => (
-    <button onClick={() => setTab(t)}
-      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
-        tab === t ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-      }`}>
-      {icon} {label}
-    </button>
-  )
+  const tabCls = (t: Tab) => `flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+    tab === t ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+  }`
 
   return (
     <div className="p-4 lg:p-8">
@@ -196,9 +191,9 @@ export default function TruckInventoryPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          {tabBtn('current', <Truck className="w-4 h-4" />, isToday ? 'Current & Count' : `${format(new Date(selectedDate + 'T12:00:00'), 'MMM d')} View`)}
-          {tabBtn('delivery', <Plus className="w-4 h-4" />, 'Add Delivery')}
-          {tabBtn('history', <History className="w-4 h-4" />, 'History')}
+          <button onClick={() => setTab('current')} className={tabCls('current')}><Truck className="w-4 h-4" />{isToday ? 'Current & Count' : format(new Date(selectedDate + 'T12:00:00'), 'MMM d') + ' View'}</button>
+          <button onClick={() => setTab('delivery')} className={tabCls('delivery')}><Plus className="w-4 h-4" />Add Delivery</button>
+          <button onClick={() => setTab('history')} className={tabCls('history')}><History className="w-4 h-4" />History</button>
         </div>
       </div>
 
