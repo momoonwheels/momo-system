@@ -81,7 +81,7 @@ export default function PackagingPage() {
             </div>
           )}
 
-          {Object.entries(grouped).map(([container, pkgs]: [string, any[]]) => (
+          {(Object.entries(grouped) as [string, any[]][]).map(([container, pkgs]) => (
             <Card key={container} className="p-0 overflow-hidden">
               <div className="px-4 py-3 bg-brand-900 text-white font-semibold text-sm">
                 {container} Container
