@@ -74,6 +74,8 @@ export default function IncomeStatementPage() {
   }
 
   const [laborCost, setLaborCost] = useState(0)
+  const [laborWages, setLaborWages] = useState(0)
+  const [laborTaxes, setLaborTaxes] = useState(0)
   const [loanRepayment, setLoanRepayment] = useState(0)
   const [processingFees, setProcessingFees] = useState(0)
 
@@ -126,12 +128,14 @@ export default function IncomeStatementPage() {
       setCogsData(cogs)
     } catch(e) { console.log('COGS error:', e) }
 
-    // Get labor from Square
+    // Get labor from Square timecards
     try {
       const laborRes = await fetch(`/api/square?action=payroll&start_date=${startDate}&end_date=${endDate}`)
       if (laborRes.ok) {
         const laborData = await laborRes.json()
         setLaborCost(laborData.totalLaborCost || 0)
+        setLaborWages(laborData.totalWages || 0)
+        setLaborTaxes(laborData.estimatedTaxes || 0)
       }
     } catch(e) { console.log('Labor data not available:', e) }
 
@@ -414,13 +418,24 @@ export default function IncomeStatementPage() {
               <div className="space-y-1 mb-4 pb-4 border-b border-gray-100">
                 <p className="text-xs font-medium text-gray-400 uppercase mb-2">From Square</p>
                 {laborCost > 0 && (
-                  <div className="flex items-center justify-between py-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">Labor</span>
-                      <span className="text-sm text-gray-600">Square Payroll</span>
+                  <>
+                    <div className="flex items-center justify-between py-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">Labor</span>
+                        <span className="text-sm text-gray-600">Wages (from timecards)</span>
+                      </div>
+                      <span className="text-sm font-medium text-red-600">{fmt$(laborWages)}</span>
                     </div>
-                    <span className="text-sm font-medium text-red-600">{fmt$(laborCost)}</span>
-                  </div>
+                    {laborTaxes > 0 && (
+                      <div className="flex items-center justify-between py-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">Labor</span>
+                          <span className="text-sm text-gray-600">Payroll Taxes (est. 7.65%)</span>
+                        </div>
+                        <span className="text-sm font-medium text-red-600">{fmt$(laborTaxes)}</span>
+                      </div>
+                    )}
+                  </>
                 )}
                 {processingFees > 0 && (
                   <div className="flex items-center justify-between py-1.5">
