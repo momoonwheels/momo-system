@@ -222,31 +222,34 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Debug - test which endpoints are available
+  // Debug payout entries to find labor/loan deductions
   if (action === 'debug') {
-    const results: any = {}
     const startDate = searchParams.get('start_date') || '2026-03-17'
     const endDate = searchParams.get('end_date') || '2026-03-22'
-
-    const endpoints = [
-      `/labor/shifts?start_at=${startDate}T07:00:00Z&end_at=${endDate}T07:00:00Z&limit=5`,
-      `/labor/team-member-wages?limit=5`,
-      `/team-members?limit=5`,
-      `/payouts?begin_time=${startDate}T07:00:00Z&end_time=${endDate}T07:00:00Z&limit=5`,
-    ]
-
-    for (const ep of endpoints) {
-      try {
-        const res = await fetch(`${SQUARE_BASE}${ep}`, {
-          headers: { 'Authorization': `Bearer ${TOKEN}`, 'Square-Version': '2024-01-18' }
-        })
-        const text = await res.text()
-        results[ep] = { status: res.status, body: text.substring(0, 200) }
-      } catch(e) {
-        results[ep] = { error: String(e) }
+    try {
+      const payoutsRes = await squareFetch(
+        `/payouts?begin_time=${startDate}T07:00:00Z&end_time=${endDate}T07:00:00Z&limit=10`
+      )
+      const details: any[] = []
+      for (const payout of (payoutsRes.payouts || []).slice(0,3)) {
+        try {
+          const entries = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=50`)
+          details.push({
+            payout_id: payout.id,
+            amount: payout.amount_money,
+            date: payout.created_at,
+            entries: entries.payout_entries?.map((e:any) => ({
+              type: e.type,
+              amount: e.amount_money,
+              fee_amount: e.fee_amount_money
+            }))
+          })
+        } catch(e) { details.push({ payout_id: payout.id, error: String(e) }) }
       }
+      return NextResponse.json({ payouts: payoutsRes.payouts?.length, details })
+    } catch(e) {
+      return NextResponse.json({ error: String(e) })
     }
-    return NextResponse.json(results)
   }
 
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
