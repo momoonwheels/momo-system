@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+export const dynamic = 'force-dynamic'
 import { createServerClient } from '@/lib/supabase'
 import Anthropic from '@anthropic-ai/sdk'
 
