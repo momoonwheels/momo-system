@@ -61,6 +61,7 @@ export async function GET(req: NextRequest) {
               state_filter: { states: ['COMPLETED'] }
             }
           },
+          return_entries: true,
           limit: 500
         }
         if (cursor) body.cursor = cursor
@@ -78,21 +79,25 @@ export async function GET(req: NextRequest) {
       let orderCount = allOrders.length
 
       for (const order of allOrders) {
-        // Gross sales = sum of line items base prices before discounts
         for (const item of order.line_items || []) {
           grossSales += (item.gross_sales_money?.amount || 0) / 100
           taxTotal += (item.total_tax_money?.amount || 0) / 100
+          // Item-level discounts
+          for (const disc of item.discounts || []) {
+            discountTotal += (disc.applied_money?.amount || 0) / 100
+          }
         }
-        // Discounts at order level
-        discountTotal += (order.total_discount_money?.amount || 0) / 100
+        // Order-level discounts
+        for (const disc of order.discounts || []) {
+          discountTotal += (disc.applied_money?.amount || 0) / 100
+        }
         tipTotal += (order.total_tip_money?.amount || 0) / 100
-        // Returns/refunds
         if ((order.total_money?.amount || 0) < 0) {
           refunds += Math.abs((order.total_money?.amount || 0)) / 100
         }
       }
 
-      // Net sales = Gross - Discounts - Tax (matching Square's formula)
+      // Net sales = Gross - Discounts - Tax
       const netSales = grossSales - discountTotal - taxTotal
 
       return NextResponse.json({
@@ -114,9 +119,9 @@ export async function GET(req: NextRequest) {
     const startDate = searchParams.get('start_date')
     const endDate = searchParams.get('end_date')
     try {
-      // Use Labor Shifts API (timecards) - same data as Square Timecards page
+      // Use Labor Shifts API - get all locations' shifts
       const shiftsRes = await squareFetch(
-        `/labor/shifts?start_at=${startDate}T00:00:00-07:00&end_at=${endDate}T23:59:59-07:00&limit=200`
+        `/labor/shifts?start_at=${startDate}T07:00:00Z&end_at=${endDate}T07:00:00Z&limit=200`
       )
 
       let totalWages = 0
@@ -217,5 +222,34 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Debug - test which endpoints are available
+  if (action === 'debug') {
+    const results: any = {}
+    const startDate = searchParams.get('start_date') || '2026-03-17'
+    const endDate = searchParams.get('end_date') || '2026-03-22'
+
+    const endpoints = [
+      `/labor/shifts?start_at=${startDate}T07:00:00Z&end_at=${endDate}T07:00:00Z&limit=5`,
+      `/labor/team-member-wages?limit=5`,
+      `/team-members?limit=5`,
+      `/payouts?begin_time=${startDate}T07:00:00Z&end_time=${endDate}T07:00:00Z&limit=5`,
+    ]
+
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(`${SQUARE_BASE}${ep}`, {
+          headers: { 'Authorization': `Bearer ${TOKEN}`, 'Square-Version': '2024-01-18' }
+        })
+        const text = await res.text()
+        results[ep] = { status: res.status, body: text.substring(0, 200) }
+      } catch(e) {
+        results[ep] = { error: String(e) }
+      }
+    }
+    return NextResponse.json(results)
+  }
+
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
 }
+
+// Temporary debug endpoint
