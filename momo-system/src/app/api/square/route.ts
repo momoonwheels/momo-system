@@ -210,11 +210,14 @@ export async function GET(req: NextRequest) {
         `/payouts?begin_time=${startDate}T00:00:00-07:00&end_time=${endDate}T23:59:59-07:00&limit=100`
       )
       for (const payout of payoutsRes.payouts || []) {
-        for (const fee of payout.payout_fee || []) {
-          if (fee.type === 'PROCESSING_FEE') {
-            processingFees += Math.abs((fee.amount_money?.amount || 0) / 100)
+        try {
+          const entries = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
+          for (const entry of entries.payout_entries || []) {
+            if (entry.type === 'CHARGE') {
+              processingFees += Math.abs((entry.fee_amount_money?.amount || 0) / 100)
+            }
           }
-        }
+        } catch(e) {}
       }
       return NextResponse.json({ processingFees })
     } catch(e) {
