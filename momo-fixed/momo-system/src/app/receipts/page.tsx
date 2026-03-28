@@ -240,48 +240,92 @@ export default function ReceiptsPage() {
 
 function COGSView() {
   const [locationId, setLocationId] = useState('')
+  const [locations, setLocations] = useState<any[]>([])
+  const [weekStart, setWeekStart] = useState('')
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
-  const [locationId2, setLId] = useState('')
-  const { format: fmt, startOfWeek: sow } = require('date-fns')
-  const weekStart = fmt(sow(new Date(),{weekStartsOn:1}),'yyyy-MM-dd')
 
   useEffect(() => {
-    if (!locationId) return
+    const { format: fmt, startOfWeek: sow } = require('date-fns')
+    setWeekStart(fmt(sow(new Date(),{weekStartsOn:1}),'yyyy-MM-dd'))
+    import('@/lib/supabase').then(({supabase}) => {
+      supabase.from('locations').select('*').eq('active',true).then(({data: locs}) => {
+        setLocations(locs||[])
+        if (locs?.[0]) setLocationId(locs[0].id)
+      })
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!locationId || !weekStart) return
     setLoading(true)
     fetch(`/api/cogs?location_id=${locationId}&week_start=${weekStart}`)
       .then(r=>r.json()).then(d => { setData(d); setLoading(false) })
-  }, [locationId])
+  }, [locationId, weekStart])
+
+  const totalCOGS = data?.cogs?.reduce((sum: number, c: any) => sum + (c.totalCost||0), 0) || 0
 
   return (
     <div>
-      <div className="mb-6">
-        <select onChange={e=>setLocationId(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-          <option value="">Select location...</option>
+      <div className="flex items-center gap-4 mb-6">
+        <select
+          value={locationId}
+          onChange={e => setLocationId(e.target.value)}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+          {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
+        {totalCOGS > 0 && (
+          <div className="text-sm font-semibold text-brand-700 bg-brand-50 px-4 py-2 rounded-lg">
+            Total COGS: ${totalCOGS.toFixed(2)}
+          </div>
+        )}
       </div>
       {loading ? <LoadingSpinner /> : data?.cogs ? (
-        <div className="grid grid-cols-2 gap-4">
-          {data.cogs.filter((c:any)=>c.totalCost>0).map((ctx: any) => (
-            <Card key={ctx.context}>
-              <div className="flex justify-between items-start mb-3">
-                <h3 className="font-semibold text-gray-900">{ctx.label}</h3>
-                <span className="text-sm font-bold text-brand-700">${ctx.totalCost.toFixed(2)}</span>
-              </div>
-              {ctx.costPerOrder && <p className="text-xs text-gray-500 mb-3">Cost per order: <span className="font-semibold text-gray-700">${ctx.costPerOrder.toFixed(2)}</span></p>}
-              {ctx.costPerBatch && <p className="text-xs text-gray-500 mb-3">Cost per batch: <span className="font-semibold text-gray-700">${ctx.costPerBatch.toFixed(2)}</span></p>}
-              <div className="space-y-1">
-                {ctx.ingredients.slice(0,5).map((ing: any) => (
-                  <div key={ing.code} className="flex justify-between text-xs">
-                    <span className="text-gray-600">{ing.name}</span>
-                    <span className="text-gray-700 font-medium">${ing.totalCost.toFixed(2)}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          ))}
-        </div>
-      ) : null}
+        data.cogs.filter((c:any)=>c.totalCost>0).length === 0 ? (
+          <Card>
+            <div className="text-center py-12 text-gray-500">
+              <p className="font-medium">No COGS data yet</p>
+              <p className="text-sm mt-1">Add ingredient costs via receipts first, then COGS will calculate automatically</p>
+            </div>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            {data.cogs.filter((c:any)=>c.totalCost>0).map((ctx: any) => (
+              <Card key={ctx.context}>
+                <div className="flex justify-between items-start mb-3">
+                  <h3 className="font-semibold text-gray-900">{ctx.label}</h3>
+                  <span className="text-sm font-bold text-brand-700">\${ctx.totalCost.toFixed(2)}</span>
+                </div>
+                {ctx.costPerOrder !== undefined && (
+                  <p className="text-xs text-gray-500 mb-3">
+                    Cost per order: <span className="font-semibold text-gray-700">\${(ctx.costPerOrder||0).toFixed(2)}</span>
+                  </p>
+                )}
+                {ctx.costPerBatch !== undefined && (
+                  <p className="text-xs text-gray-500 mb-3">
+                    Cost per batch: <span className="font-semibold text-gray-700">\${(ctx.costPerBatch||0).toFixed(2)}</span>
+                  </p>
+                )}
+                <div className="space-y-1 mt-2 border-t border-gray-50 pt-2">
+                  {ctx.ingredients.filter((i:any)=>i.totalCost>0).slice(0,6).map((ing: any) => (
+                    <div key={ing.code} className="flex justify-between text-xs">
+                      <span className="text-gray-600">{ing.name}</span>
+                      <span className="text-gray-700 font-medium">\${ing.totalCost.toFixed(2)}</span>
+                    </div>
+                  ))}
+                  {ctx.ingredients.filter((i:any)=>i.totalCost>0).length > 6 && (
+                    <p className="text-xs text-gray-400 text-right">+{ctx.ingredients.filter((i:any)=>i.totalCost>0).length - 6} more</p>
+                  )}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )
+      ) : (
+        <Card>
+          <div className="text-center py-12 text-gray-400">Select a location to view COGS</div>
+        </Card>
+      )}
     </div>
   )
 }
