@@ -219,6 +219,7 @@ export default function UsersPage() {
             ))}
           </tbody>
         </table>
+        </div>
         {users.length === 0 && (
           <div className="text-center py-12 text-gray-400">No users yet. Add your first user!</div>
         )}
