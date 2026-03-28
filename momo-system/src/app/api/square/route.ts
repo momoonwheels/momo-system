@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
           query: {
             filter: {
               date_time_filter: {
-                created_at: {
+                closed_at: {
                   start_at: toRFC3339Start(startDate),
                   end_at: toRFC3339End(endDate)
                 }
