@@ -22,10 +22,16 @@ async function squareFetch(path: string, options: any = {}) {
   return res.json()
 }
 
+function toRFC3339Start(date: string) { return `${date}T07:00:00.000Z` }
+function toRFC3339End(date: string) { return `${date}T06:59:59.999Z` }
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const action = searchParams.get('action')
+  const startDate = searchParams.get('start_date') || ''
+  const endDate = searchParams.get('end_date') || ''
 
+  // ── LOCATIONS ────────────────────────────────────────────────────
   if (action === 'locations') {
     try {
       const data = await squareFetch('/locations')
@@ -35,15 +41,13 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── SALES ────────────────────────────────────────────────────────
   if (action === 'sales') {
     const locationId = searchParams.get('square_location_id')
-    const startDate = searchParams.get('start_date')
-    const endDate = searchParams.get('end_date')
     if (!locationId || !startDate || !endDate)
       return NextResponse.json({ error: 'missing params' }, { status: 400 })
 
     try {
-      // Use Orders search - most accurate for sales data
       let allOrders: any[] = []
       let cursor: string | undefined
 
@@ -54,8 +58,8 @@ export async function GET(req: NextRequest) {
             filter: {
               date_time_filter: {
                 created_at: {
-                  start_at: `${startDate}T00:00:00-07:00`,
-                  end_at: `${endDate}T23:59:59-07:00`
+                  start_at: toRFC3339Start(startDate),
+                  end_at: toRFC3339End(endDate)
                 }
               },
               state_filter: { states: ['COMPLETED'] }
@@ -65,29 +69,22 @@ export async function GET(req: NextRequest) {
           limit: 500
         }
         if (cursor) body.cursor = cursor
-
         const data = await squareFetch('/orders/search', { method: 'POST', body: JSON.stringify(body) })
         allOrders = allOrders.concat(data.orders || [])
         cursor = data.cursor
       } while (cursor)
 
-      let grossSales = 0
-      let tipTotal = 0
-      let discountTotal = 0
-      let taxTotal = 0
-      let refunds = 0
-      let orderCount = allOrders.length
+      let grossSales = 0, tipTotal = 0, discountTotal = 0, taxTotal = 0, refunds = 0
+      const orderCount = allOrders.length
 
       for (const order of allOrders) {
         for (const item of order.line_items || []) {
           grossSales += (item.gross_sales_money?.amount || 0) / 100
           taxTotal += (item.total_tax_money?.amount || 0) / 100
-          // Item-level discounts
           for (const disc of item.discounts || []) {
             discountTotal += (disc.applied_money?.amount || 0) / 100
           }
         }
-        // Order-level discounts
         for (const disc of order.discounts || []) {
           discountTotal += (disc.applied_money?.amount || 0) / 100
         }
@@ -97,127 +94,71 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Net sales = Gross - Discounts - Tax
       const netSales = grossSales - discountTotal - taxTotal
-
-      return NextResponse.json({
-        grossSales,
-        discountTotal,
-        taxTotal,
-        tipTotal,
-        refunds,
-        netSales,
-        orderCount,
-        debug: { totalOrders: allOrders.length }
-      })
+      return NextResponse.json({ grossSales, discountTotal, taxTotal, tipTotal, refunds, netSales, orderCount })
     } catch(e) {
-      return NextResponse.json({ grossSales:0, netSales:0, tipTotal:0, refunds:0, processingFees:0, orderCount:0, error: String(e) })
+      return NextResponse.json({ grossSales:0, netSales:0, tipTotal:0, refunds:0, discountTotal:0, orderCount:0, error: String(e) })
     }
   }
 
+  // ── PAYROLL (Labor) ──────────────────────────────────────────────
   if (action === 'payroll') {
-    const startDate = searchParams.get('start_date')
-    const endDate = searchParams.get('end_date')
     try {
-      // Use Labor Shifts API - get all locations' shifts
       const shiftsRes = await squareFetch(
-        `/labor/shifts?start_at=${startDate}T07:00:00Z&end_at=${endDate}T07:00:00Z&limit=200`
+        `/labor/shifts?start_at=${toRFC3339Start(startDate)}&end_at=${toRFC3339End(endDate)}&limit=200`
       )
-
-      let totalWages = 0
-      let totalHours = 0
-      const shiftDetails: any[] = []
-
+      let totalWages = 0, totalHours = 0
       for (const shift of shiftsRes.shifts || []) {
         const hourlyRate = (shift.wage?.hourly_rate?.amount || 0) / 100
         if (shift.start_at && shift.end_at) {
           const hours = (new Date(shift.end_at).getTime() - new Date(shift.start_at).getTime()) / (1000 * 60 * 60)
           totalHours += hours
           totalWages += hours * hourlyRate
-          shiftDetails.push({
-            employee_id: shift.employee_id,
-            hours: hours.toFixed(2),
-            rate: hourlyRate,
-            wage: (hours * hourlyRate).toFixed(2),
-            date: shift.start_at?.split('T')[0]
-          })
         }
       }
-
-      // Add estimated payroll taxes (7.65% employer FICA)
-      const payrollTaxRate = 0.0765
-      const estimatedTaxes = totalWages * payrollTaxRate
+      const estimatedTaxes = totalWages * 0.0765
       const totalLaborCost = totalWages + estimatedTaxes
-
-      return NextResponse.json({
-        totalWages,
-        estimatedTaxes,
-        totalLaborCost,
-        totalHours,
-        shiftDetails,
-        taxRate: payrollTaxRate
-      })
+      return NextResponse.json({ totalWages, estimatedTaxes, totalLaborCost, totalHours })
     } catch(e) {
       return NextResponse.json({ totalLaborCost: 0, totalWages: 0, totalHours: 0, error: String(e) })
     }
   }
 
+  // ── LOANS (Square Capital) ────────────────────────────────────────
   if (action === 'loans') {
-    const startDate = searchParams.get('start_date')
-    const endDate = searchParams.get('end_date')
     try {
-      // Get payouts and look for loan deductions
+      const payoutsUrl = `/payouts?begin_time=${toRFC3339Start(startDate)}&end_time=${toRFC3339End(endDate)}&limit=100`
+      const payoutsRes = await squareFetch(payoutsUrl)
       let loanRepayment = 0
-      let cursor: string | undefined
 
-      do {
-        const url = `/payouts?begin_time=${startDate}T07:00:00.000Z&end_time=${endDate}T07:00:00.000Z&limit=100`&cursor=${cursor}` : ''}`
-        const payoutsRes = await squareFetch(url)
-        
-        for (const payout of payoutsRes.payouts || []) {
-          // Loan repayments show as payout fee deductions
-          for (const fee of payout.payout_fee || []) {
-            if (['LOAN_FEE', 'CAPITAL_ADVANCE_REPAYMENT', 'LOAN_REPAYMENT'].includes(fee.type)) {
-              loanRepayment += Math.abs((fee.amount_money?.amount || 0) / 100)
-            }
+      for (const payout of payoutsRes.payouts || []) {
+        const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
+        for (const entry of entriesRes.payout_entries || []) {
+          if (entry.type === 'SQUARE_CAPITAL_PAYMENT') {
+            loanRepayment += Math.abs((entry.amount_money?.amount || 0) / 100)
           }
-          // Also check for manual loan deductions in payout entries
-          const entryUrl = `/payouts/${payout.id}/payout-entries?limit=100`
-          try {
-            const entries = await squareFetch(entryUrl)
-            for (const entry of entries.payout_entries || []) {
-              if (entry.type === 'LOAN' || entry.type === 'CAPITAL_ADVANCE') {
-                loanRepayment += Math.abs((entry.amount_money?.amount || 0) / 100)
-              }
-            }
-          } catch {}
         }
-        cursor = payoutsRes.cursor
-      } while (cursor)
-
+      }
       return NextResponse.json({ loanRepayment })
     } catch(e) {
       return NextResponse.json({ loanRepayment: 0, error: String(e) })
     }
   }
 
+  // ── PROCESSING FEES ──────────────────────────────────────────────
   if (action === 'processing-fees') {
-    const startDate = searchParams.get('start_date')
-    const endDate = searchParams.get('end_date')
     try {
+      const payoutsUrl = `/payouts?begin_time=${toRFC3339Start(startDate)}&end_time=${toRFC3339End(endDate)}&limit=100`
+      const payoutsRes = await squareFetch(payoutsUrl)
       let processingFees = 0
-      const payoutsRes = await squareFetch(
-        `/payouts?begin_time=${startDate}T07:00:00.000Z&end_time=${endDate}T07:00:00.000Z&limit=100`
-      )
+
       for (const payout of payoutsRes.payouts || []) {
-        try {
-          const entries = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
-          for (const entry of entries.payout_entries || []) {
-            if (entry.type === 'CHARGE') {
-              processingFees += Math.abs((entry.fee_amount_money?.amount || 0) / 100)
-            }
+        const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
+        for (const entry of entriesRes.payout_entries || []) {
+          if (entry.type === 'CHARGE') {
+            processingFees += Math.abs((entry.fee_amount_money?.amount || 0) / 100)
           }
-        } catch(e) {}
+        }
       }
       return NextResponse.json({ processingFees })
     } catch(e) {
@@ -225,31 +166,27 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Debug payout entries to find labor/loan deductions
+  // ── DEBUG ─────────────────────────────────────────────────────────
   if (action === 'debug') {
-    const startDate = searchParams.get('start_date') || '2026-03-17'
-    const endDate = searchParams.get('end_date') || '2026-03-22'
     try {
-      const payoutsRes = await squareFetch(
-        `/payouts?begin_time=${startDate}T07:00:00.000Z&end_time=${endDate}T07:00:00.000Z&limit=100`
-      )
+      const payoutsUrl = `/payouts?begin_time=${toRFC3339Start(startDate)}&end_time=${toRFC3339End(endDate)}&limit=5`
+      const payoutsRes = await squareFetch(payoutsUrl)
       const details: any[] = []
-      for (const payout of (payoutsRes.payouts || []).slice(0,3)) {
-        try {
-          const entries = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=50`)
-          details.push({
-            payout_id: payout.id,
-            amount: payout.amount_money,
-            date: payout.created_at,
-            entries: entries.payout_entries?.map((e:any) => ({
-              type: e.type,
-              amount: e.amount_money,
-              fee_amount: e.fee_amount_money
-            }))
-          })
-        } catch(e) { details.push({ payout_id: payout.id, error: String(e) }) }
+
+      for (const payout of (payoutsRes.payouts || []).slice(0, 2)) {
+        const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=50`)
+        details.push({
+          payout_id: payout.id,
+          payout_amount_cents: payout.amount_money?.amount,
+          date: payout.created_at,
+          entries: entriesRes.payout_entries?.map((e: any) => ({
+            type: e.type,
+            amount_cents: e.amount_money?.amount,
+            fee_cents: e.fee_amount_money?.amount
+          }))
+        })
       }
-      return NextResponse.json({ payouts: payoutsRes.payouts?.length, details })
+      return NextResponse.json({ total_payouts: payoutsRes.payouts?.length, details })
     } catch(e) {
       return NextResponse.json({ error: String(e) })
     }
@@ -257,5 +194,3 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
 }
-
-// Temporary debug endpoint
