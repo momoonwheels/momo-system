@@ -91,13 +91,18 @@ export default function IncomeStatementPage() {
 
     for (const sqId of squareIds) {
       if (!sqId) continue
-      const data = await fetch(`/api/square?action=sales&square_location_id=${sqId}&start_date=${startDate}&end_date=${endDate}`).then(r=>r.json())
-      totalGross += data.grossSales || 0
-      totalNetSales += data.netSales || 0
-      totalTips += data.tipTotal || 0
-      totalRefunds += data.refunds || 0
-      totalProcessingFees += data.processingFees || 0
-      orderCount += data.orderCount || 0
+      try {
+        const salesRes = await fetch(`/api/square?action=sales&square_location_id=${sqId}&start_date=${startDate}&end_date=${endDate}`)
+        if (salesRes.ok) {
+          const data = await salesRes.json()
+          totalGross += data.grossSales || 0
+          totalNetSales += data.netSales || 0
+          totalTips += data.tipTotal || 0
+          totalRefunds += data.refunds || 0
+          totalProcessingFees += data.processingFees || 0
+          orderCount += data.orderCount || 0
+        }
+      } catch(e) { console.log('Sales data error:', e) }
     }
 
     setProcessingFees(totalProcessingFees)
@@ -110,22 +115,34 @@ export default function IncomeStatementPage() {
     })
 
     // Get COGS from confirmed receipts
-    const { data: receiptLines } = await supabase
-      .from('receipt_line_items')
-      .select('total_price, receipts!inner(receipt_date, status)')
-      .eq('status','confirmed')
-      .gte('receipts.receipt_date', startDate)
-      .lte('receipts.receipt_date', endDate)
-    const cogs = receiptLines?.reduce((s:number,l:any)=>s+(Number(l.total_price)||0),0)||0
-    setCogsData(cogs)
+    try {
+      const { data: receiptLines } = await supabase
+        .from('receipt_line_items')
+        .select('total_price, receipts!inner(receipt_date)')
+        .eq('status','confirmed')
+        .gte('receipts.receipt_date', startDate)
+        .lte('receipts.receipt_date', endDate)
+      const cogs = receiptLines?.reduce((s:number,l:any)=>s+(Number(l.total_price)||0),0)||0
+      setCogsData(cogs)
+    } catch(e) { console.log('COGS error:', e) }
 
     // Get labor from Square
-    const laborData = await fetch(`/api/square?action=payroll&start_date=${startDate}&end_date=${endDate}`).then(r=>r.json())
-    setLaborCost(laborData.totalLaborCost || 0)
+    try {
+      const laborRes = await fetch(`/api/square?action=payroll&start_date=${startDate}&end_date=${endDate}`)
+      if (laborRes.ok) {
+        const laborData = await laborRes.json()
+        setLaborCost(laborData.totalLaborCost || 0)
+      }
+    } catch(e) { console.log('Labor data not available:', e) }
 
     // Get loan repayments from Square
-    const loanData = await fetch(`/api/square?action=loans&start_date=${startDate}&end_date=${endDate}`).then(r=>r.json())
-    setLoanRepayment(loanData.loanRepayment || 0)
+    try {
+      const loanRes = await fetch(`/api/square?action=loans&start_date=${startDate}&end_date=${endDate}`)
+      if (loanRes.ok) {
+        const loanData = await loanRes.json()
+        setLoanRepayment(loanData.loanRepayment || 0)
+      }
+    } catch(e) { console.log('Loan data not available:', e) }
 
     // Get manual expenses
     const appLoc = locationView === 'combined' ? null : appLocations.find((l:any) =>
