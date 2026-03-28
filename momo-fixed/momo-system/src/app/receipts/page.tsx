@@ -5,7 +5,7 @@ import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import Badge from '@/components/ui/Badge'
-import { Receipt, Upload, CheckCircle, XCircle, AlertCircle, DollarSign } from 'lucide-react'
+import { Receipt, Upload, CheckCircle, XCircle, AlertCircle, DollarSign, Trash2 } from 'lucide-react'
 
 export default function ReceiptsPage() {
   const [receipts, setReceipts] = useState<any[]>([])
@@ -75,9 +75,36 @@ export default function ReceiptsPage() {
     const sb = (await import('@/lib/supabase')).supabase
     const { data: lines } = await sb.from('receipt_line_items')
       .select('*').eq('receipt_id', receiptId).gte('match_confidence', 0.8)
-    for (const line of lines||[]) await confirmLine(line.id, true)
+
+    for (const line of lines||[]) {
+      // Update line status
+      await sb.from('receipt_line_items').update({ status: 'confirmed' }).eq('id', line.id)
+      // Update ingredient cost directly from line data
+      if (line.matched_ingredient_id && line.unit_price) {
+        await sb.from('ingredients')
+          .update({ current_unit_cost: line.unit_price })
+          .eq('id', line.matched_ingredient_id)
+        await sb.from('cogs_log').insert({
+          ingredient_id: line.matched_ingredient_id,
+          receipt_id: receiptId,
+          unit_price: line.unit_price,
+          cost_per_recipe_unit: line.unit_price,
+          notes: 'Confirmed via receipt'
+        })
+      }
+    }
+
     await sb.from('receipts').update({ status: 'confirmed' }).eq('id', receiptId)
-    toast.success('All high-confidence lines confirmed!')
+    toast.success('All high-confidence lines confirmed & costs updated!')
+    loadReceipts()
+  }
+
+  const deleteReceipt = async (receiptId: string) => {
+    if (!confirm('Delete this receipt and all its line items?')) return
+    const sb = (await import('@/lib/supabase')).supabase
+    await sb.from('receipt_line_items').delete().eq('receipt_id', receiptId)
+    await sb.from('receipts').delete().eq('id', receiptId)
+    toast.success('Receipt deleted')
     loadReceipts()
   }
 
@@ -165,6 +192,11 @@ export default function ReceiptsPage() {
                       </span>
                     )}
                     {statusBadge(r.status)}
+                    <button onClick={() => deleteReceipt(r.id)}
+                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Delete receipt">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
                 {r.receipt_line_items?.length > 0 && (
