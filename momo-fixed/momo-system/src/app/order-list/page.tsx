@@ -35,7 +35,6 @@ export default function OrderListPage() {
 
   const saveOnHand = async () => {
     setSaving(true)
-    const { supabase } = await import('@/lib/supabase')
     const ingData = data?.ingredients || []
     const updates = ingData
       .filter((ing: any) => onHand[ing.code] !== undefined)
@@ -43,13 +42,15 @@ export default function OrderListPage() {
         ingredient_id: ing.id,
         quantity_on_hand: onHand[ing.code] || 0
       }))
-    const { error } = await supabase
-      .from('newport_inventory')
-      .upsert(updates, { onConflict: 'ingredient_id' })
-    if (error) { toast.error('Failed to save'); setSaving(false); return }
+    const res = await fetch('/api/newport-inventory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    })
+    if (!res.ok) { toast.error('Failed to save'); setSaving(false); return }
     toast.success('Inventory saved!')
     setSaving(false)
-    load() // Refresh to recalculate units to buy
+    load()
   }
 
   // Recalculate units to buy based on current on-hand inputs
