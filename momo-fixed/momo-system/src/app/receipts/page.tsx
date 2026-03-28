@@ -249,7 +249,7 @@ function COGSView() {
     const { format: fmt, startOfWeek: sow } = require('date-fns')
     setWeekStart(fmt(sow(new Date(),{weekStartsOn:1}),'yyyy-MM-dd'))
     import('@/lib/supabase').then(({supabase}) => {
-      supabase.from('locations').select('*').eq('active',true).then(({data: locs}) => {
+      supabase.from('locations').select('*').eq('active',true).eq('type','newport').then(({data: locs}) => {
         setLocations(locs||[])
         if (locs?.[0]) setLocationId(locs[0].id)
       })
@@ -260,7 +260,9 @@ function COGSView() {
     if (!locationId || !weekStart) return
     setLoading(true)
     fetch(`/api/cogs?location_id=${locationId}&week_start=${weekStart}`)
-      .then(r=>r.json()).then(d => { setData(d); setLoading(false) })
+      .then(r=>r.json())
+      .then(d => { console.log('COGS data:', d); setData(d); setLoading(false) })
+      .catch(e => { console.error('COGS error:', e); setLoading(false) })
   }, [locationId, weekStart])
 
   const totalCOGS = data?.cogs?.reduce((sum: number, c: any) => sum + (c.totalCost||0), 0) || 0
