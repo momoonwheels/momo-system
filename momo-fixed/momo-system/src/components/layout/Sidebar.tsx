@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ClipboardList, Package, ShoppingCart,
-  Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users, TrendingUp
+  Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users, TrendingUp, LogOut
 } from 'lucide-react'
 
 const nav = [
@@ -49,8 +49,17 @@ export default function Sidebar() {
           )
         })}
       </nav>
-      <div className="p-4 border-t border-brand-800 text-xs text-brand-500">
-        v1.0 · Newport
+      <div className="p-4 border-t border-brand-800">
+        <button
+          onClick={async () => {
+            await fetch('/api/auth', { method: 'DELETE' })
+            window.location.href = '/login'
+          }}
+          className="w-full flex items-center gap-2 px-3 py-2 text-brand-300 hover:text-white hover:bg-brand-800 rounded-lg text-sm transition-all">
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </button>
+        <div className="text-xs text-brand-600 mt-2 px-3">v1.0 · Newport</div>
       </div>
     </div>
   )
