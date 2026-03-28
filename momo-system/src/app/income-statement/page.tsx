@@ -144,6 +144,15 @@ export default function IncomeStatementPage() {
       }
     } catch(e) { console.log('Loan data not available:', e) }
 
+    // Get processing fees from Square
+    try {
+      const feesRes = await fetch(`/api/square?action=processing-fees&start_date=${startDate}&end_date=${endDate}`)
+      if (feesRes.ok) {
+        const feesData = await feesRes.json()
+        setProcessingFees(feesData.processingFees || 0)
+      }
+    } catch(e) { console.log('Processing fees not available:', e) }
+
     // Get manual expenses
     const appLoc = locationView === 'combined' ? null : appLocations.find((l:any) =>
       locationView === 'lc' ? l.name.includes('Lincoln') : l.name.includes('Salem')
@@ -306,9 +315,11 @@ export default function IncomeStatementPage() {
               </h3>
               <div className="space-y-2">
                 {[
-                  { label:'Gross Sales',       val: salesData?.totalGross||0,    cls:'text-gray-800' },
-                  { label:'Tips (pass-through)',val: -(salesData?.totalTips||0),  cls:'text-gray-500' },
-                  { label:'Refunds',            val: -(salesData?.totalRefunds||0), cls:'text-red-600' },
+                  { label:'Gross Sales',        val: salesData?.totalGross||0,        cls:'text-gray-800' },
+                  { label:'Discounts & Comps',  val: -(salesData?.discountTotal||0),  cls:'text-gray-500' },
+                  { label:'Tax',                val: -(salesData?.taxTotal||0),        cls:'text-gray-500' },
+                  { label:'Tips (pass-through)',val: -(salesData?.totalTips||0),       cls:'text-gray-500' },
+                  { label:'Refunds',            val: -(salesData?.totalRefunds||0),    cls:'text-red-600' },
                 ].map(r => (
                   <div key={r.label} className="flex justify-between text-sm">
                     <span className="text-gray-600">{r.label}</span>
