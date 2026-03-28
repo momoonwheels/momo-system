@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+export const dynamic = 'force-dynamic'
 import { createServerClient, getConfig, getRecipeMap, getWeeklyOrders } from '@/lib/supabase'
 import { calcIngredientNeeds, calcOrderLines } from '@/lib/calculations'
 
