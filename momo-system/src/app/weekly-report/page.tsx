@@ -172,7 +172,7 @@ export default function WeeklyReportPage() {
                 ))}
                 <tr className="bg-brand-50 font-bold border-t-2 border-brand-200">
                   <td className="px-4 py-2.5 text-sm">Total Orders</td>
-                  <td className="px-4 py-2.5 text-center text-sm">{Object.values(data.plannedByMenu||{}).reduce((s:any,v:any)=>s+v,0)}</td>
+                  <td className="px-4 py-2.5 text-center text-sm">{Number(Object.values(data.plannedByMenu||{}).reduce((s:any,v:any)=>s+v,0))}</td>
                   <td className="px-4 py-2.5 text-center text-sm">{data.orderCount||0}</td>
                   <td colSpan={3} className="px-4 py-2.5 text-center text-xs text-gray-400">
                     🟢 ±10%  🟡 10-20%  🔴 {'>'}20%
