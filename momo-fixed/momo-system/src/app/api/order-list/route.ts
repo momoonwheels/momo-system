@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
   }
 
   const { data: ingData } = await sb.from('ingredients')
-    .select('code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit')
+    .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit')
     .order('sort_order')
   const meta: Record<string,{convFactor:number;minOrderQty:number}> = {}
   for (const ing of ingData||[]) {
