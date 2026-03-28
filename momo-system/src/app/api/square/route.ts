@@ -80,65 +80,50 @@ export async function GET(req: NextRequest) {
 
   // Get payroll/labor costs
   if (action === 'payroll') {
-    const startDate = searchParams.get('start_date')
-    const endDate = searchParams.get('end_date')
-    
-    // Get team member wage settings
-    const shiftsRes = await squareFetch(
-      `/labor/shifts?start_at=${startDate}T00:00:00Z&end_at=${endDate}T23:59:59Z&limit=200`
-    )
-    
-    let totalLaborCost = 0
-    let totalHours = 0
-    const shiftDetails: any[] = []
-
-    for (const shift of shiftsRes.shifts || []) {
-      const wages = shift.wage?.hourly_rate?.amount || 0
-      const hourlyRate = wages / 100
-      // Calculate hours worked
-      if (shift.start_at && shift.end_at) {
-        const start = new Date(shift.start_at)
-        const end = new Date(shift.end_at)
-        const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60)
-        totalHours += hours
-        totalLaborCost += hours * hourlyRate
-        shiftDetails.push({
-          employee: shift.employee_id,
-          hours: hours.toFixed(2),
-          rate: hourlyRate,
-          cost: (hours * hourlyRate).toFixed(2),
-          date: shift.start_at?.split('T')[0]
-        })
+    try {
+      const startDate = searchParams.get('start_date')
+      const endDate = searchParams.get('end_date')
+      const shiftsRes = await squareFetch(
+        `/labor/shifts?start_at=${startDate}T00:00:00Z&end_at=${endDate}T23:59:59Z&limit=200`
+      )
+      let totalLaborCost = 0
+      let totalHours = 0
+      const shiftDetails: any[] = []
+      for (const shift of shiftsRes.shifts || []) {
+        const hourlyRate = (shift.wage?.hourly_rate?.amount || 0) / 100
+        if (shift.start_at && shift.end_at) {
+          const hours = (new Date(shift.end_at).getTime() - new Date(shift.start_at).getTime()) / (1000 * 60 * 60)
+          totalHours += hours
+          totalLaborCost += hours * hourlyRate
+          shiftDetails.push({ hours: hours.toFixed(2), rate: hourlyRate, cost: (hours * hourlyRate).toFixed(2) })
+        }
       }
+      return NextResponse.json({ totalLaborCost, totalHours, shiftDetails })
+    } catch(e) {
+      return NextResponse.json({ totalLaborCost: 0, totalHours: 0, shiftDetails: [], error: String(e) })
     }
-
-    return NextResponse.json({ totalLaborCost, totalHours, shiftDetails })
   }
 
   // Get Square loan repayments
   if (action === 'loans') {
-    const startDate = searchParams.get('start_date')
-    const endDate = searchParams.get('end_date')
-    
-    // Square Banking/Loans API
-    const loansRes = await squareFetch('/financials/bank-accounts')
-    
-    // Get loan activity via payouts/settlements
-    const payoutsRes = await squareFetch(
-      `/payouts?begin_time=${startDate}T00:00:00Z&end_time=${endDate}T23:59:59Z&limit=100`
-    )
-
-    // Loan repayments appear as deductions in payouts
-    let loanRepayment = 0
-    for (const payout of payoutsRes.payouts || []) {
-      for (const item of payout.payout_fee || []) {
-        if (item.type === 'LOAN_FEE' || item.type === 'CAPITAL_ADVANCE_REPAYMENT') {
-          loanRepayment += Math.abs((item.amount_money?.amount || 0) / 100)
+    try {
+      const startDate = searchParams.get('start_date')
+      const endDate = searchParams.get('end_date')
+      const payoutsRes = await squareFetch(
+        `/payouts?begin_time=${startDate}T00:00:00Z&end_time=${endDate}T23:59:59Z&limit=100`
+      )
+      let loanRepayment = 0
+      for (const payout of payoutsRes.payouts || []) {
+        for (const item of payout.payout_fee || []) {
+          if (item.type === 'LOAN_FEE' || item.type === 'CAPITAL_ADVANCE_REPAYMENT') {
+            loanRepayment += Math.abs((item.amount_money?.amount || 0) / 100)
+          }
         }
       }
+      return NextResponse.json({ loanRepayment, payouts: payoutsRes.payouts?.length || 0 })
+    } catch(e) {
+      return NextResponse.json({ loanRepayment: 0, error: String(e) })
     }
-
-    return NextResponse.json({ loanRepayment, payouts: payoutsRes.payouts?.length || 0 })
   }
 
   return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
