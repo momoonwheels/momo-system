@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-tap-highlight-color: transparent; }
+  input, select, textarea, button { touch-action: manipulation; }
+}
+
+@layer utilities {
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+}
+
+/* Mobile table scroll */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Larger touch targets on mobile */
+@media (max-width: 1024px) {
+  input[type="number"],
+  input[type="text"],
+  input[type="date"],
+  input[type="password"],
+  select {
+    font-size: 16px !important; /* Prevents iOS zoom */
+    min-height: 44px;
+  }
+  button { min-height: 44px; }
+}
