@@ -73,44 +73,62 @@ export default function IncomeStatementPage() {
     return appLoc ? [squareMapping[appLoc.id]].filter(Boolean) : []
   }
 
+  const [laborCost, setLaborCost] = useState(0)
+  const [loanRepayment, setLoanRepayment] = useState(0)
+  const [processingFees, setProcessingFees] = useState(0)
+
   const loadData = useCallback(async () => {
     setLoading(true)
     const squareIds = getSquareLocationIds()
 
-    // Fetch sales for each Square location
+    // Fetch sales breakdown per Square location
     let totalGross = 0
+    let totalNetSales = 0
+    let totalTips = 0
     let totalRefunds = 0
-    let totalTax = 0
+    let totalProcessingFees = 0
     let orderCount = 0
 
     for (const sqId of squareIds) {
       if (!sqId) continue
       const data = await fetch(`/api/square?action=sales&square_location_id=${sqId}&start_date=${startDate}&end_date=${endDate}`).then(r=>r.json())
-      for (const order of data.orders||[]) {
-        const gross = (order.total_money?.amount||0) / 100
-        const refund = (order.refunds?.reduce((s:number,r:any)=>(s+(r.amount_money?.amount||0)),0)||0) / 100
-        const tax = (order.total_tax_money?.amount||0) / 100
-        totalGross += gross
-        totalRefunds += refund
-        totalTax += tax
-        orderCount++
-      }
+      totalGross += data.grossSales || 0
+      totalNetSales += data.netSales || 0
+      totalTips += data.tipTotal || 0
+      totalRefunds += data.refunds || 0
+      totalProcessingFees += data.processingFees || 0
+      orderCount += data.orderCount || 0
     }
 
-    // Get COGS from confirmed receipts in date range
+    setProcessingFees(totalProcessingFees)
+    setSalesData({
+      totalGross,
+      totalRefunds,
+      totalTips,
+      netSales: totalNetSales,
+      orderCount
+    })
+
+    // Get COGS from confirmed receipts
     const { data: receiptLines } = await supabase
       .from('receipt_line_items')
-      .select('total_price, receipts(receipt_date, status)')
+      .select('total_price, receipts!inner(receipt_date, status)')
       .eq('status','confirmed')
       .gte('receipts.receipt_date', startDate)
       .lte('receipts.receipt_date', endDate)
     const cogs = receiptLines?.reduce((s:number,l:any)=>s+(Number(l.total_price)||0),0)||0
     setCogsData(cogs)
 
-    setSalesData({ totalGross, totalRefunds, totalTax, netSales: totalGross - totalRefunds - totalTax, orderCount })
+    // Get labor from Square
+    const laborData = await fetch(`/api/square?action=payroll&start_date=${startDate}&end_date=${endDate}`).then(r=>r.json())
+    setLaborCost(laborData.totalLaborCost || 0)
+
+    // Get loan repayments from Square
+    const loanData = await fetch(`/api/square?action=loans&start_date=${startDate}&end_date=${endDate}`).then(r=>r.json())
+    setLoanRepayment(loanData.loanRepayment || 0)
 
     // Get manual expenses
-    const appLoc = locationView === 'combined' ? null : appLocations.find(l =>
+    const appLoc = locationView === 'combined' ? null : appLocations.find((l:any) =>
       locationView === 'lc' ? l.name.includes('Lincoln') : l.name.includes('Salem')
     )
     const expUrl = `/api/manual-expenses?start_date=${startDate}&end_date=${endDate}${appLoc ? `&location_id=${appLoc.id}` : '&location_id=all'}`
@@ -150,10 +168,11 @@ export default function IncomeStatementPage() {
     loadData()
   }
 
-  const totalExpenses = expenses.reduce((s,e)=>s+Number(e.amount),0)
+  const totalManualExpenses = expenses.reduce((s,e)=>s+Number(e.amount),0)
+  const totalExpenses = totalManualExpenses + laborCost + processingFees + loanRepayment
   const netSales = salesData?.netSales || 0
   const grossProfit = netSales - cogsData
-  const netProfit = grossProfit - totalExpenses
+  const netProfit = grossProfit - laborCost - processingFees - loanRepayment - totalManualExpenses
   const cogsPercent = pct(cogsData, netSales)
   const profitMargin = pct(netProfit, netSales)
 
@@ -270,18 +289,23 @@ export default function IncomeStatementPage() {
               </h3>
               <div className="space-y-2">
                 {[
-                  { label:'Gross Sales',    val: salesData?.totalGross||0,   cls:'text-gray-800' },
-                  { label:'Refunds',        val: -(salesData?.totalRefunds||0), cls:'text-red-600' },
-                  { label:'Tax Collected',  val: -(salesData?.totalTax||0),  cls:'text-gray-500' },
+                  { label:'Gross Sales',       val: salesData?.totalGross||0,    cls:'text-gray-800' },
+                  { label:'Tips (pass-through)',val: -(salesData?.totalTips||0),  cls:'text-gray-500' },
+                  { label:'Refunds',            val: -(salesData?.totalRefunds||0), cls:'text-red-600' },
                 ].map(r => (
                   <div key={r.label} className="flex justify-between text-sm">
                     <span className="text-gray-600">{r.label}</span>
-                    <span className={`font-medium ${r.cls}`}>{fmt$(Math.abs(r.val))}</span>
+                    <span className={`font-medium ${r.cls}`}>
+                      {r.val < 0 ? '-' : ''}{fmt$(Math.abs(r.val))}
+                    </span>
                   </div>
                 ))}
                 <div className="flex justify-between text-sm font-bold border-t pt-2 mt-2">
                   <span>Net Sales</span>
                   <span className="text-green-700">{fmt$(netSales)}</span>
+                </div>
+                <div className="text-xs text-gray-400 mt-1">
+                  {salesData?.orderCount||0} orders · Tips {fmt$(salesData?.totalTips||0)} distributed to staff
                 </div>
               </div>
             </Card>
@@ -357,9 +381,43 @@ export default function IncomeStatementPage() {
               </div>
             )}
 
-            {expenses.length === 0 ? (
+            {/* Auto-pulled expenses from Square */}
+            {(laborCost > 0 || processingFees > 0 || loanRepayment > 0) && (
+              <div className="space-y-1 mb-4 pb-4 border-b border-gray-100">
+                <p className="text-xs font-medium text-gray-400 uppercase mb-2">From Square</p>
+                {laborCost > 0 && (
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">Labor</span>
+                      <span className="text-sm text-gray-600">Square Payroll</span>
+                    </div>
+                    <span className="text-sm font-medium text-red-600">{fmt$(laborCost)}</span>
+                  </div>
+                )}
+                {processingFees > 0 && (
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full">Fees</span>
+                      <span className="text-sm text-gray-600">Square Processing Fees</span>
+                    </div>
+                    <span className="text-sm font-medium text-red-600">{fmt$(processingFees)}</span>
+                  </div>
+                )}
+                {loanRepayment > 0 && (
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full">Loan</span>
+                      <span className="text-sm text-gray-600">Square Loan Repayment</span>
+                    </div>
+                    <span className="text-sm font-medium text-red-600">{fmt$(loanRepayment)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {expenses.length === 0 && laborCost === 0 && processingFees === 0 && loanRepayment === 0 ? (
               <p className="text-sm text-gray-400 text-center py-6">No expenses recorded for this period. Add one above!</p>
-            ) : (
+            ) : expenses.length === 0 ? null : (
               <div className="space-y-1">
                 {expenses.map(e => (
                   <div key={e.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
@@ -377,11 +435,15 @@ export default function IncomeStatementPage() {
                   </div>
                 ))}
                 <div className="flex justify-between text-sm font-bold pt-3 mt-2 border-t border-gray-200">
-                  <span>Total Expenses</span>
-                  <span className="text-red-600">{fmt$(totalExpenses)}</span>
+                  <span>Manual Expenses</span>
+                  <span className="text-red-600">{fmt$(totalManualExpenses)}</span>
                 </div>
               </div>
             )}
+            <div className="flex justify-between text-sm font-bold pt-3 mt-2 border-t-2 border-gray-200">
+              <span>Total Operating Expenses</span>
+              <span className="text-red-600">{fmt$(totalExpenses)}</span>
+            </div>
           </Card>
 
           {/* Net Profit Summary */}
