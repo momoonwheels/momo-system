@@ -56,7 +56,7 @@ export default function OrderListPage() {
     if (failed) toast.error('Some items failed to save')
     else toast.success('Inventory saved!')
     setSaving(false)
-    load()
+    // Don't reload - keep current onHand values visible
   }
 
   // Recalculate units to buy based on current on-hand inputs
