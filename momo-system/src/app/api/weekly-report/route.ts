@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
           // Match line items to menu codes
           for (const item of order.line_items||[]) {
             const name = (item.name||'').toLowerCase()
-            if (name.includes('regular') || name.includes('steamed')) actualByMenu.REG += Number(item.quantity)||1
+            if (name.includes('regular') || name.includes('steamed') || name.includes('steam')) actualByMenu.REG += Number(item.quantity)||1
             else if (name.includes('fried')) actualByMenu.FRI += Number(item.quantity)||1
             else if (name.includes('chilli') || name.includes('chili')) actualByMenu.CHI += Number(item.quantity)||1
             else if (name.includes('jhol')) actualByMenu.JHO += Number(item.quantity)||1
