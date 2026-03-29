@@ -3,8 +3,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ClipboardList, Package, ShoppingCart,
-  Truck, Receipt, Settings, BookOpen, UtensilsCrossed,
-  Users, TrendingUp, LogOut, X, FileText
+  Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users, TrendingUp, Banknote
 } from 'lucide-react'
 
 const nav = [
@@ -18,6 +17,8 @@ const nav = [
   { href: '/config',           icon: Settings,        label: 'Configuration'    },
   { href: '/users',            icon: Users,           label: 'Users'            },
   { href: '/income-statement', icon: TrendingUp,      label: 'Income Statement' },
+  { href: '/income-statement', icon: TrendingUp,      label: 'Income Statement' },
+  { href: '/cash-flow',        icon: Banknote,        label: 'Cash Flow'        },
   { href: '/weekly-report',    icon: FileText,        label: 'Weekly Report'    },
 ]
 
