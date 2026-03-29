@@ -115,9 +115,8 @@ export default function OrderListPage() {
 
   // Week label: LC = Wed-Sun, Salem = Thu-Wed
   const wedDate = new Date(weekStart + 'T12:00:00')
-  const sunDate = new Date(wedDate); sunDate.setDate(wedDate.getDate() + 4)
-  const weekLabel = `${format(wedDate, 'MMM d')} – ${format(sunDate, 'MMM d, yyyy')}`
-
+  const wedNextDate = new Date(wedDate); wedNextDate.setDate(wedDate.getDate() + 7)
+const weekLabel = `${format(wedDate, 'MMM d')} – ${format(wedNextDate, 'MMM d, yyyy')}`
   return (
     <div className="p-4 lg:p-8">
       <PageHeader
