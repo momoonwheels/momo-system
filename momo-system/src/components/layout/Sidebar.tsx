@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ClipboardList, Package, ShoppingCart,
-  Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users, TrendingUp, Banknote, FileText
+  Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users, TrendingUp, Banknote, FileText, X
 } from 'lucide-react'
 
 const nav = [
