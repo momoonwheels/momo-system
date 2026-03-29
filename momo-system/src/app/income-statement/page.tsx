@@ -118,14 +118,8 @@ export default function IncomeStatementPage() {
       setCogsData(lines?.reduce((s:number,l:any)=>s+(Number(l.total_price)||0),0)||0)
     } catch(e) { console.error('COGS error:', e) }
 
-    // ── Processing fees from Square payouts ────────────────────────
-    try {
-      const res = await fetch(`/api/square?action=processing-fees&start_date=${startDate}&end_date=${endDate}`)
-      if (res.ok) {
-        const d = await res.json()
-        setProcessingFees(d.processingFees || 0)
-      }
-    } catch(e) {}
+    // Processing fees come from the sales API call (already calculated per payment)
+    // Will be set after sales data loads below
 
     // ── Loan from Square payouts ───────────────────────────────────
     try {
