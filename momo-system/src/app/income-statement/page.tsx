@@ -89,7 +89,7 @@ export default function IncomeStatementPage() {
     const sqIds = getSquareIds()
 
     // ── Sales from Square ──────────────────────────────────────────
-    let totalGross = 0, totalNet = 0, totalTips = 0, totalDiscount = 0, totalRefunds = 0, totalOrders = 0
+    let totalGross = 0, totalNet = 0, totalTips = 0, totalDiscount = 0, totalRefunds = 0, totalOrders = 0, totalFees = 0
 
     for (const sqId of sqIds) {
       try {
@@ -102,10 +102,12 @@ export default function IncomeStatementPage() {
           totalDiscount += d.discountTotal || 0
           totalRefunds += d.refunds || 0
           totalOrders += d.orderCount || 0
+          totalFees += d.processingFees || 0
         }
       } catch(e) { console.error('Sales error:', e) }
     }
     setSalesData({ grossSales: totalGross, netSales: totalNet, tipTotal: totalTips, discountTotal: totalDiscount, refunds: totalRefunds, orderCount: totalOrders })
+    setProcessingFees(totalFees)
 
     // ── COGS from receipts ─────────────────────────────────────────
     try {
@@ -118,8 +120,7 @@ export default function IncomeStatementPage() {
       setCogsData(lines?.reduce((s:number,l:any)=>s+(Number(l.total_price)||0),0)||0)
     } catch(e) { console.error('COGS error:', e) }
 
-    // Processing fees come from the sales API call (already calculated per payment)
-    // Will be set after sales data loads below
+
 
     // ── Loan from Square payouts ───────────────────────────────────
     try {
