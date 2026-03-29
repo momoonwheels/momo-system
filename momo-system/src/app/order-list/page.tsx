@@ -24,7 +24,7 @@ export default function OrderListPage() {
     const oh: Record<string,number> = {}
     for (const ing of json?.ingredients||[]) {
       const line = (json?.lines||[]).find((l:any)=>l.code===ing.code)
-      if (line) { const conv=Number(line.convFactor)||1; oh[ing.code]=conv>0?(Number(line.onHand)||0)/conv:0 }
+      if (line) { const conv=Number(line.convFactor)||1; oh[ing.code]=conv>0?(line.onHand != null ? Number(line.onHand):0)/conv:0 }
       else oh[ing.code]=0
     }
     setOnHand(oh)
