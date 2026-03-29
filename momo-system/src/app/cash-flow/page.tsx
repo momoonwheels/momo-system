@@ -224,8 +224,8 @@ export default function CashFlowPage() {
     <div className="space-y-6 max-w-5xl mx-auto">
       <PageHeader
         title="Cash Flow"
-        subtitle="Bank transactions & cash position"
-        actions={
+        sub="Bank transactions & cash position"
+        action={
           <div className="flex gap-2 items-center flex-wrap">
             {PRESETS.map(p => (
               <button
