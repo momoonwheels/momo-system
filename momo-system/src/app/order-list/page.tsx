@@ -92,7 +92,7 @@ export default function OrderListPage() {
 >
   Reset All to 0
 </button>
-<button onClick={saveOnHand} disabled={saving} ...>
+<button onClick={saveOnHand} disabled={saving}
   Save
 </button>
           </div>
