@@ -9,7 +9,7 @@ import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import { ShoppingCart, Save } from 'lucide-react'
 
 export default function OrderListPage() {
-  const [weekStart, setWeekStart] = useState(format(startOfWeek(new Date(),{weekStartsOn:1}),'yyyy-MM-dd'))
+  const [weekStart, setWeekStart] = useState(() => {   const d = new Date()   const day = d.getDay() // 0=Sun, 1=Mon...   const diff = day >= 3 ? day - 3 : day + 4 // snap back to Wednesday   d.setDate(d.getDate() - diff)   return format(d, 'yyyy-MM-dd') })
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [onHand, setOnHand] = useState<Record<string,number>>({})
