@@ -102,9 +102,17 @@ export default function ReceiptsPage() {
   const deleteReceipt = async (receiptId: string) => {
     if (!confirm('Delete this receipt and all its line items?')) return
     const sb = (await import('@/lib/supabase')).supabase
+    await sb.from('cogs_log').delete().eq('receipt_id', receiptId)
     await sb.from('receipt_line_items').delete().eq('receipt_id', receiptId)
     await sb.from('receipts').delete().eq('id', receiptId)
     toast.success('Receipt deleted')
+    loadReceipts()
+  }
+
+  const updateReceiptDate = async (receiptId: string, newDate: string) => {
+    const sb = (await import('@/lib/supabase')).supabase
+    await sb.from('receipts').update({ receipt_date: newDate }).eq('id', receiptId)
+    toast.success('Date updated!')
     loadReceipts()
   }
 
@@ -183,7 +191,19 @@ export default function ReceiptsPage() {
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <h3 className="font-semibold text-gray-900">{r.vendor_name||'Unknown Vendor'}</h3>
-                    <p className="text-sm text-gray-500">{r.receipt_date} · {r.receipt_line_items?.length||0} items</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <input
+                        type="date"
+                        defaultValue={r.receipt_date}
+                        onBlur={e => {
+                          if (e.target.value !== r.receipt_date) {
+                            updateReceiptDate(r.id, e.target.value)
+                          }
+                        }}
+                        className="text-sm text-gray-500 border border-gray-200 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
+                      />
+                      <span className="text-sm text-gray-400">· {r.receipt_line_items?.length||0} items</span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-3">
                     {r.total_amount && (
