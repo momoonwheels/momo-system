@@ -132,15 +132,41 @@ export async function GET(req: NextRequest) {
       const url = `/payouts?begin_time=${startUTC(startDate)}&end_time=${endUTC(endDate)}&limit=100`
       const payoutsRes = await squareFetch(url)
       let loanRepayment = 0
+      let totalPayoutAmount = 0
+      let capitalEntries = 0
+
       for (const payout of payoutsRes.payouts || []) {
+        totalPayoutAmount += (payout.amount_money?.amount || 0) / 100
         const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
+        
+        let payoutGross = 0
+        let payoutFees = 0
+        let payoutCapital = 0
+
         for (const entry of entriesRes.payout_entries || []) {
+          if (entry.type === 'CHARGE') {
+            // gross sales amount for this entry
+            payoutGross += (entry.gross_amount_money?.amount || 0) / 100
+            payoutFees += Math.abs((entry.fee_amount_money?.amount || 0) / 100)
+          }
           if (entry.type === 'SQUARE_CAPITAL_PAYMENT') {
-            loanRepayment += Math.abs((entry.amount_money?.amount || 0) / 100)
+            capitalEntries++
+            // Try all possible amount fields
+            const amt = (entry.amount_money?.amount || 
+                        entry.gross_amount_money?.amount || 
+                        entry.net_amount_money?.amount || 0) / 100
+            payoutCapital += Math.abs(amt)
           }
         }
+        loanRepayment += payoutCapital
       }
-      return NextResponse.json({ loanRepayment })
+
+      return NextResponse.json({ 
+        loanRepayment, 
+        totalPayoutAmount,
+        capitalEntries,
+        debug: { payouts: payoutsRes.payouts?.length }
+      })
     } catch(e) {
       return NextResponse.json({ loanRepayment: 0, error: String(e) })
     }
