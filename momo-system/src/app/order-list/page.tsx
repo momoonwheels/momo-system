@@ -76,11 +76,25 @@ export default function OrderListPage() {
         action={
           <div className="flex items-center gap-2">
             <span className="text-xs text-brand-700 bg-brand-50 px-2 py-1 rounded-lg font-semibold">{totalToBuy} to order</span>
-            <button onClick={saveOnHand} disabled={saving}
-              className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
-              <Save className="w-3.5 h-3.5" />
-              {saving?'...':'Save'}
-            </button>
+            <button
+  onClick={async () => {
+    if (!confirm('Reset ALL on-hand (Newport + Truck) to zero?')) return
+    const reset: Record<string,number> = {}
+    Object.keys(onHand).forEach(k => { reset[k] = 0 })
+    setOnHand(reset)
+    await fetch('/api/truck-inventory/reset', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location_id: 'all' })
+    })
+    toast.success('All on-hand reset to 0 — click Save to confirm Newport')
+  }}
+  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
+>
+  Reset All to 0
+</button>
+<button onClick={saveOnHand} disabled={saving} ...>
+  Save
+</button>
           </div>
         }
       />
@@ -143,21 +157,3 @@ export default function OrderListPage() {
     </div>
   )
 }
-<button
-  onClick={async () => {
-    if (!confirm('Reset ALL on-hand (Newport + Truck) to zero?')) return
-    // Zero out Newport on hand
-    const reset: Record<string,number> = {}
-    Object.keys(onHand).forEach(k => { reset[k] = 0 })
-    setOnHand(reset)
-    // Zero out truck inventory via API
-    await fetch('/api/truck-inventory/reset', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ location_id: 'all' })
-    })
-    toast('All on-hand reset to 0 — click Save to confirm Newport', { icon: '🔄' })
-  }}
-  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
->
-  Reset All to 0
-</button>
