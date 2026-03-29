@@ -336,7 +336,7 @@ export default function IncomeStatementPage() {
                   <span>Net Sales</span>
                   <span className="text-green-700">{fmt$(netSales)}</span>
                 </div>
-                <p className="text-xs text-gray-400">{salesData?.orderCount||0} orders · Tips {fmt$(salesData?.tipTotal||0)} to staff</p>
+                <p className="text-xs text-gray-400">{salesData?.orderCount||0} payments · Tips {fmt$(salesData?.tipTotal||0)} distributed to staff</p>
               </div>
             </Card>
 
