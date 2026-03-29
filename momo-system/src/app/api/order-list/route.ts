@@ -15,14 +15,29 @@ export async function GET(req: NextRequest) {
   let orders = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
 
   if (combined) {
-    // Newport: combine all food truck locations
-    const { data: locs } = await sb.from('locations').select('id').eq('type','food_truck').eq('active',true)
-    const allOrders = await Promise.all((locs||[]).map(l => getWeeklyOrders(l.id, weekStart!)))
+    // Newport: combine all food truck locations using each location's own week_start_day
+    const { data: locs } = await sb.from('locations')
+      .select('id, week_start_day')
+      .eq('type','food_truck').eq('active',true)
+
+    const dayOffset: Record<string,number> = {
+      wednesday:0, thursday:1, friday:2,
+      saturday:3, sunday:4, monday:5, tuesday:6
+    }
+
+    const allOrders = await Promise.all((locs||[]).map(l => {
+      // weekStart is always a Wednesday — offset forward for each location
+      const offset = dayOffset[l.week_start_day ?? 'wednesday'] ?? 0
+      const d = new Date(weekStart + 'T12:00:00')
+      d.setDate(d.getDate() + offset)
+      const locWeekStart = d.toISOString().split('T')[0]
+      return getWeeklyOrders(l.id, locWeekStart)
+    }))
+
     for (const o of allOrders) {
       orders.REG += o.REG; orders.FRI += o.FRI; orders.CHI += o.CHI
       orders.JHO += o.JHO; orders.CW += o.CW
-    }
-  } else if (locationId) {
+    }  } else if (locationId) {
     orders = await getWeeklyOrders(locationId, weekStart)
   }
 
