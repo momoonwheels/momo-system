@@ -43,8 +43,8 @@ export async function GET(req: NextRequest) {
   const meta: Record<string,{convFactor:number;minOrderQty:number}> = {}
   for (const ing of ingData||[]) {
     meta[ing.code] = {
-      convFactor: Number(ing.conv_factor) || 1,
-      minOrderQty: Number(ing.min_order_qty) || 1
+      convFactor: Number(ing.conv_factor)?? 0,
+      minOrderQty: Number(ing.min_order_qty)?? 0
     }
   }
 
