@@ -18,7 +18,6 @@ const nav = [
   { href: '/config',           icon: Settings,        label: 'Configuration'    },
   { href: '/users',            icon: Users,           label: 'Users'            },
   { href: '/income-statement', icon: TrendingUp,      label: 'Income Statement' },
-  { href: '/income-statement', icon: TrendingUp,      label: 'Income Statement' },
   { href: '/cash-flow',        icon: Banknote,        label: 'Cash Flow'        },
   { href: '/weekly-report',    icon: FileText,        label: 'Weekly Report'    },
 ]
