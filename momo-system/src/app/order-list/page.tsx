@@ -93,7 +93,9 @@ export default function OrderListPage() {
   Reset All to 0
 </button>
 <button onClick={saveOnHand} disabled={saving}
-  Save
+  className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50">
+  <Save className="w-4 h-4" />
+  {saving ? 'Saving...' : 'Save'}
 </button>
           </div>
         }
