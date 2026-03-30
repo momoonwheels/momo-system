@@ -47,6 +47,7 @@ export function calcPackageNeeds(o: WeeklyOrders, cfg: Config): PackageNeeds {
     'JM-4':        ceil(o.JHO*get(cfg,'SERV_JM4_15',0.5)/15/get(cfg,'SZ_JM4',2)),
     'JM-5':        ceil(o.JHO*0.25*0.17/get(cfg,'SZ_JM5',0.5)),
     'CH-1':        ceil(o.CW*2.5/get(cfg,'SZ_CH1',80)),
+    'CH-2': 2,     // Chicken Bouillon — always send 2, restock when ≤1
     'CH-3':        ceil(o.CW*buf/get(cfg,'SZ_CH3',33.8)),
     'CH-4':        ceil(o.CW*0.17/get(cfg,'SZ_CH4',0.5)),
     'CH-5':        ceil(o.CW/get(cfg,'SZ_CH5',10)),
@@ -71,6 +72,8 @@ export function calcPackageNeeds(o: WeeklyOrders, cfg: Config): PackageNeeds {
     'ST-4-JHOL':   ceil(o.JHO/get(cfg,'SZ_ST4J',12)),
     'ST-BAGS':     ceil(total/get(cfg,'SZ_BAG',500)),
     'WATER':       ceil(total/get(cfg,'SZ_WAT',32)),
+    'SO-1': 2,     // Canola Oil — always send 2 containers, restock when ≤1
+    'SO-2': 2,     // Salt — always send 2 bottles, restock when ≤1
   };
 }
 
