@@ -3,7 +3,6 @@ export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 import { createServerClient, getConfig, getRecipeMap, getWeeklyOrders } from '@/lib/supabase'
 import { calcIngredientNeeds, calcOrderLines } from '@/lib/calculations'
-export const fetchCache = 'force-no-store'
 
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
