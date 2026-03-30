@@ -158,7 +158,8 @@ export default function PackagingPage() {
     needed['JM-4']  = Math.ceil(JHO*(cfg.SERV_JM4_15??0.5)/15/(cfg.SZ_JM4??2))
     needed['JM-5']  = Math.ceil(JHO*0.25*0.17/(cfg.SZ_JM5??0.5))
     needed['CH-1']  = Math.ceil(CW*2.5/(cfg.SZ_CH1??80))
-    needed['CH-2']  = 2
+    const truckBouillon = (data.totalOnTruck?.['CH-2'] ?? 0)
+    needed['CH-2'] = Math.max(0, 2 - truckBouillon)
     needed['CH-3']  = Math.ceil(CW*buf/(cfg.SZ_CH3??33.8))
     needed['CH-4']  = Math.ceil(CW*0.17/(cfg.SZ_CH4??0.5))
     needed['CH-5']  = Math.ceil(CW/(cfg.SZ_CH5??10))
