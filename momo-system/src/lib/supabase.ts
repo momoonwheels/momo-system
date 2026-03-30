@@ -5,25 +5,33 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-// Server-side client (for API routes)
+// Server-side client (for API routes) — always fresh, no caching
 export function createServerClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      auth: { persistSession: false },
+      global: { fetch: (url, opts) => fetch(url, { ...opts, cache: 'no-store' }) }
+    }
   )
 }
 
-// Helper: get config as key->value map
+// Helper: get config as key->value map — uses server client to avoid stale cache
 export async function getConfig(): Promise<Record<string, number>> {
-  const { data } = await supabase.from('config').select('key,value')
+  const sb = createServerClient()
+  const { data } = await sb.from('config').select('key,value')
   return Object.fromEntries((data||[]).map(r => [r.key, Number(r.value)]))
 }
 
 // Helper: get recipe map { ingredientCode: { context: qty } }
+// Uses server client so ALL rows per ingredient are returned fresh
 export async function getRecipeMap(): Promise<Record<string, Record<string, number>>> {
-  const { data } = await supabase
+  const sb = createServerClient()
+  const { data } = await sb
     .from('recipe_items')
     .select('qty, context, ingredients(code)')
+    .order('context')
   const map: Record<string, Record<string, number>> = {}
   for (const row of data||[]) {
     const code = (row.ingredients as any)?.code
@@ -36,7 +44,8 @@ export async function getRecipeMap(): Promise<Record<string, Record<string, numb
 
 // Helper: get weekly orders summed across all menu items for a location+week
 export async function getWeeklyOrders(locationId: string, weekStart: string) {
-  const { data } = await supabase
+  const sb = createServerClient()
+  const { data } = await sb
     .from('planned_orders')
     .select('*, menu_items(code)')
     .eq('location_id', locationId)
