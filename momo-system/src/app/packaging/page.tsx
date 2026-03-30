@@ -241,7 +241,7 @@ export default function PackagingPage() {
           <div className={`grid gap-4 ${schedule.length >= 2 ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
             {schedule.map((slot, slotIdx) => {
               const slotNeeds = calcSlotNeeds(slot.days, slotIdx)
-              const hasAny = Object.values(slotNeeds).some(v => v > 0)
+              const hasAny = Object.values(slotNeeds).some((v: any) => v > 0)
               return (
                 <Card key={slot.label}>
                   <div className="flex items-center justify-between mb-4">
