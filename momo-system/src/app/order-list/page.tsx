@@ -235,7 +235,10 @@ const weekLabel = `${format(wedDate, 'MMM d')} – ${format(wedNextDate, 'MMM d,
                             }))}
                             className="w-20 text-center text-sm border border-green-200 bg-green-50 text-green-800 font-semibold rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-green-400"
                           />
-                          <span className="text-xs text-gray-400">{ing?.recipe_unit}</span>
+                          <span className="text-xs text-gray-400">   {ing?.vendor_unit_desc ? ing.vendor_unit_desc.split('=')[0].trim() : ing?.recipe_unit} </span>
+                          {ing?.vendor_unit_desc && (
+  <span className="text-xs text-gray-300 ml-1">({ing.vendor_unit_desc})</span>
+)}
                         </div>
                         {netNeeded > 0 && (
                           <span className="text-xs text-gray-500">need {netNeeded.toFixed(1)} more</span>
