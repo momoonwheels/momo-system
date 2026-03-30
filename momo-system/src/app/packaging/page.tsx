@@ -144,6 +144,7 @@ export default function PackagingPage() {
     const buf = 1 + (cfg.BUF_PCT ?? 0.05)
     const needed: Record<string, number> = {}
     const { REG, FRI, CHI, JHO, CW } = slotOrders
+    const totalOnTruck = data.totalOnTruck ?? {}
 
     const batchRA = Math.ceil((REG+FRI+JHO) / (cfg.BATCH_RA ?? 40))
     const batchSA = Math.ceil((REG+FRI) / (cfg.BATCH_SA ?? 40))
@@ -158,18 +159,18 @@ export default function PackagingPage() {
     needed['JM-4']  = Math.ceil(JHO*(cfg.SERV_JM4_15??0.5)/15/(cfg.SZ_JM4??2))
     needed['JM-5']  = Math.ceil(JHO*0.25*0.17/(cfg.SZ_JM5??0.5))
     needed['CH-1']  = Math.ceil(CW*2.5/(cfg.SZ_CH1??80))
-    const truckBouillon = (data.totalOnTruck?.['CH-2'] ?? 0)
-    needed['CH-2'] = Math.max(0, 2 - truckBouillon)
+    needed['CH-2']  = Math.max(0, 2 - (totalOnTruck['CH-2'] ?? 0))  // Chicken Bouillon — fixed 2
     needed['CH-3']  = Math.ceil(CW*buf/(cfg.SZ_CH3??33.8))
     needed['CH-4']  = Math.ceil(CW*0.17/(cfg.SZ_CH4??0.5))
     needed['CH-5']  = Math.ceil(CW/(cfg.SZ_CH5??10))
     needed['CH-6']  = Math.ceil(CW*1/(cfg.SZ_CH6??80))
     needed['CH-7']  = Math.ceil(CW*6/(cfg.SZ_CH7??64))
     needed['CH-8']  = Math.ceil(CW*1/(cfg.SZ_CH6??80))
+    needed['SO-1']  = Math.max(0, 2 - (totalOnTruck['SO-1'] ?? 0))  // Canola Oil — fixed 2
+    needed['SO-2']  = Math.max(0, 2 - (totalOnTruck['SO-2'] ?? 0))  // Salt — fixed 2
 
     // Subtract on-truck for first slot only
     if (slotIdx === 0) {
-      const totalOnTruck = data.totalOnTruck ?? {}
       for (const k in needed) {
         needed[k] = Math.max(0, needed[k] - (totalOnTruck[k] ?? 0))
       }
@@ -191,7 +192,8 @@ export default function PackagingPage() {
     return acc
   }, {})
 
-  const containerOrder = ['FM','CM','JM','CH','RA','SA','ST','WAT','Other']
+  // SO added between CH and RA
+  const containerOrder = ['FM','CM','JM','CH','SO','RA','SA','ST','WAT','Other']
   const sortedGroups = containerOrder
     .filter(c => grouped[c]?.length > 0)
     .map(c => [c, grouped[c]] as [string, any[]])
@@ -340,7 +342,7 @@ export default function PackagingPage() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b">
-              <h2 className="font-bold text-lg text-gray-900">Edit Delivery Schedule</h2>
+              <h2 className="font-bold text-lg text-grayic-900">Edit Delivery Schedule</h2>
               <button onClick={() => setShowSchedule(false)} className="p-1 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
