@@ -158,11 +158,13 @@ export default function PackagingPage() {
     needed['JM-4']  = Math.ceil(JHO*(cfg.SERV_JM4_15??0.5)/15/(cfg.SZ_JM4??2))
     needed['JM-5']  = Math.ceil(JHO*0.25*0.17/(cfg.SZ_JM5??0.5))
     needed['CH-1']  = Math.ceil(CW*2.5/(cfg.SZ_CH1??80))
+    needed['CH-2']  = 2
     needed['CH-3']  = Math.ceil(CW*buf/(cfg.SZ_CH3??33.8))
     needed['CH-4']  = Math.ceil(CW*0.17/(cfg.SZ_CH4??0.5))
     needed['CH-5']  = Math.ceil(CW/(cfg.SZ_CH5??10))
-    needed['CH-6']  = Math.ceil(CW*2/(cfg.SZ_CH6??80))
+    needed['CH-6']  = Math.ceil(CW*1/(cfg.SZ_CH6??80))
     needed['CH-7']  = Math.ceil(CW*6/(cfg.SZ_CH7??64))
+    needed['CH-8']  = Math.ceil(CW*1/(cfg.SZ_CH6??80))
 
     // Subtract on-truck for first slot only
     if (slotIdx === 0) {
