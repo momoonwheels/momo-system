@@ -4,11 +4,10 @@ export const fetchCache = 'force-no-store'
 import { createServerClient, getConfig } from '@/lib/supabase'
 import { calcPackageNeeds, calcPackagesToSend } from '@/lib/calculations'
 
-// ST items: send 1 case when truck has ≤ half remaining, else 0
-// Water is excluded — calculated per order as normal
 const ST_PACKAGES = [
   'ST-1-BOWLS','ST-1-ALUM','ST-2-CUPS','ST-2-LIDS',
   'ST-3-FORKS','ST-4-SPOONS','ST-4-JHOL','ST-BAGS',
+  'ST-NAP','ST-5-JLID','ST-6-GLOVE','ST-7-FILM',
 ]
 
 export async function GET(req: NextRequest) {
@@ -21,7 +20,6 @@ export async function GET(req: NextRequest) {
 
   const cfg = await getConfig()
 
-  // Get planned orders with per-day breakdown
   const { data: ordersData } = await sb.from('planned_orders')
     .select('*, menu_items(code)')
     .eq('location_id', locationId)
@@ -41,7 +39,6 @@ export async function GET(req: NextRequest) {
 
   const needed = calcPackageNeeds(orders, cfg)
 
-  // Get truck inventory
   const { data: truckData } = await sb
     .from('truck_inventory')
     .select('quantity, delivery_received, packages!inner(code)')
@@ -60,14 +57,13 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Base toSend calculation
   const toSend = calcPackagesToSend(needed, totalOnTruck)
 
-  // Override ST items: threshold-based (send 1 when ≤ 0.5 on truck)
+  // ST items: send 1 when truck has ≤ 0.5 remaining
   for (const code of ST_PACKAGES) {
     const onHand = totalOnTruck[code] ?? 0
-    toSend[code]  = onHand <= 0.5 ? 1 : 0
-    needed[code]  = toSend[code] // keep needed in sync for display
+    toSend[code] = onHand <= 0.5 ? 1 : 0
+    needed[code] = toSend[code]
   }
 
   const { data: packages } = await sb.from('packages')
