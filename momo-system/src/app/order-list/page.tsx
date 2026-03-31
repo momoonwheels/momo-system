@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import { ShoppingCart, Save, RotateCcw, Lock, CheckCircle, AlertTriangle, Minus, ChevronDown, ChevronRight } from 'lucide-react'
+import { ShoppingCart, Save, RotateCcw, Lock, CheckCircle, AlertTriangle, Minus, ChevronDown, ChevronRight, ShoppingBag } from 'lucide-react'
 
 function snapToWednesday(): string {
   const d = new Date()
@@ -15,11 +15,23 @@ function snapToWednesday(): string {
   return format(d, 'yyyy-MM-dd')
 }
 
-function fmt(n: number, unit: string) {
-  return `${Number(n.toFixed(2)).toString()} ${unit}`
+type Tab = 'order' | 'reconciliation'
+type ShopStatus = 'full' | 'partial' | null
+
+const SHOP_STATUS_KEY = (weekStart: string) => `shop_status_${weekStart}`
+
+function loadShopStatus(weekStart: string): Record<string, ShopStatus> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = localStorage.getItem(SHOP_STATUS_KEY(weekStart))
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
 }
 
-type Tab = 'order' | 'reconciliation'
+function saveShopStatus(weekStart: string, status: Record<string, ShopStatus>) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(SHOP_STATUS_KEY(weekStart), JSON.stringify(status))
+}
 
 export default function OrderListPage() {
   const [weekStart, setWeekStart]   = useState<string>(snapToWednesday)
@@ -34,6 +46,18 @@ export default function OrderListPage() {
   const [notes, setNotes]           = useState<Record<string,string>>({})
   const [overallNotes, setOverallNotes] = useState('')
   const [expanded, setExpanded]     = useState<Record<string,boolean>>({})
+  const [shopStatus, setShopStatus] = useState<Record<string, ShopStatus>>({})
+
+  // Load shop status from localStorage when week changes
+  useEffect(() => {
+    setShopStatus(loadShopStatus(weekStart))
+  }, [weekStart])
+
+  const setItemStatus = (code: string, status: ShopStatus) => {
+    const next = { ...shopStatus, [code]: status }
+    setShopStatus(next)
+    saveShopStatus(weekStart, next)
+  }
 
   const load = useCallback(async () => {
     if (!weekStart) return
@@ -113,14 +137,13 @@ export default function OrderListPage() {
 
   const lockOrder = async () => {
     if (!data?.lines?.length) { toast.error('No order data to lock'); return }
-    if (!confirm(`Lock this order for week of ${weekStart}? This records what the system recommended.`)) return
+    if (!confirm(`Lock this order for week of ${weekStart}?`)) return
     setLocking(true)
     try {
       const lines = data.lines || []
       const ingMeta = (data.ingredients || []).reduce((acc: any, ing: any) => {
         acc[ing.code] = ing; return acc
       }, {})
-
       const items = lines.map((line: any) => {
         const ing = ingMeta[line.code] || {}
         const conv = Number(line.convFactor) || 1
@@ -137,7 +160,6 @@ export default function OrderListPage() {
           recommended_vendor_qty: vendorQty,
         }
       })
-
       const res = await fetch('/api/order-lock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -193,11 +215,15 @@ export default function OrderListPage() {
   }, {})
   const totalToBuy = lines.filter((l: any) => calcUnitsToBuy(l) > 0).length
 
+  // Shopping progress counts
+  const toBuyLines = lines.filter((l: any) => calcUnitsToBuy(l) > 0)
+  const doneCount = toBuyLines.filter((l: any) => shopStatus[l.code] === 'full').length
+  const partialCount = toBuyLines.filter((l: any) => shopStatus[l.code] === 'partial').length
+
   const wedDate = new Date(weekStart + 'T12:00:00')
   const sunDate = new Date(wedDate); sunDate.setDate(wedDate.getDate() + 7)
   const weekLabel = `${format(wedDate, 'MMM d')} – ${format(sunDate, 'MMM d, yyyy')}`
 
-  // Reconciliation helpers
   const getVarianceStatus = (recQty: number, actQty: number, conv: number) => {
     if (recQty === 0 && actQty === 0) return 'none'
     if (actQty === 0) return 'missing'
@@ -224,6 +250,15 @@ export default function OrderListPage() {
     if (s === 'over')    return <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
     if (s === 'missing') return <Minus className="w-4 h-4 text-red-400 flex-shrink-0" />
     return null
+  }
+
+  // Row background based on shop status
+  const rowBg = (code: string, unitsToBuy: number) => {
+    if (unitsToBuy === 0) return ''
+    const s = shopStatus[code]
+    if (s === 'full')    return 'bg-green-50'
+    if (s === 'partial') return 'bg-amber-50'
+    return 'bg-red-50'
   }
 
   return (
@@ -310,6 +345,37 @@ export default function OrderListPage() {
           <div className="flex justify-center py-16"><LoadingSpinner /></div>
         ) : !data ? null : (
           <div className="space-y-4">
+
+            {/* Shopping progress bar */}
+            {totalToBuy > 0 && (
+              <div className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <ShoppingBag className="w-4 h-4 text-gray-500" />
+                    <span className="text-sm font-medium text-gray-700">Shopping progress</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full bg-green-500 inline-block" />
+                      Fully bought: {doneCount}
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full bg-amber-400 inline-block" />
+                      Partial: {partialCount}
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full bg-red-400 inline-block" />
+                      Remaining: {totalToBuy - doneCount - partialCount}
+                    </span>
+                  </div>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden flex">
+                  <div className="bg-green-500 h-full transition-all" style={{ width: `${(doneCount/totalToBuy)*100}%` }} />
+                  <div className="bg-amber-400 h-full transition-all" style={{ width: `${(partialCount/totalToBuy)*100}%` }} />
+                </div>
+              </div>
+            )}
+
             {(Object.entries(grouped) as [string,any[]][]).map(([category, catLines]) => (
               <Card key={category} className="p-0 overflow-hidden">
                 <div className="px-4 py-2.5 bg-brand-900 text-white font-semibold text-sm flex justify-between">
@@ -318,7 +384,7 @@ export default function OrderListPage() {
                     {catLines.filter(l => calcUnitsToBuy(l) > 0).length} to order
                   </span>
                 </div>
-                <div className="divide-y divide-gray-50">
+                <div className="divide-y divide-gray-100">
                   {catLines.map((line: any) => {
                     const ing = ingMeta[line.code]
                     const needed = Number(line.needed) || 0
@@ -326,8 +392,10 @@ export default function OrderListPage() {
                     const currentOnHand = (onHand[line.code] || 0) * conv
                     const netNeeded = Math.max(0, needed - currentOnHand)
                     const unitsToBuy = calcUnitsToBuy(line)
+                    const status = shopStatus[line.code]
+
                     return (
-                      <div key={line.code} className="px-4 py-3">
+                      <div key={line.code} className={`px-4 py-3 transition-colors ${rowBg(line.code, unitsToBuy)}`}>
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="text-sm font-medium text-gray-800 truncate">{ing?.name || line.code}</div>
@@ -335,7 +403,7 @@ export default function OrderListPage() {
                               {line.code} · needed: {needed.toFixed(1)} {ing?.recipe_unit}
                             </div>
                           </div>
-                          {unitsToBuy > 0 && (
+                          {unitsToBuy > 0 ? (
                             <div className="flex-shrink-0 text-right">
                               <span className="text-sm font-bold text-white bg-brand-600 px-3 py-1 rounded-full">
                                 Buy {unitsToBuy}
@@ -344,10 +412,12 @@ export default function OrderListPage() {
                                 <div className="text-xs text-gray-400 mt-0.5">{ing.vendor_unit_desc}</div>
                               )}
                             </div>
-                          )}
+                          ) : null}
                         </div>
-                        <div className="flex items-center gap-3 mt-2">
-                          <div className="flex items-center gap-2 flex-1">
+
+                        <div className="flex items-center gap-3 mt-2 flex-wrap">
+                          {/* On-hand input */}
+                          <div className="flex items-center gap-2">
                             <span className="text-xs text-gray-500">On Hand:</span>
                             <input type="number" min="0" step="any" inputMode="decimal"
                               value={onHand[line.code] ?? 0}
@@ -358,8 +428,33 @@ export default function OrderListPage() {
                               {ing?.vendor_unit_desc ? ing.vendor_unit_desc.split('=')[0].trim().split(' ')[0] : ing?.recipe_unit}
                             </span>
                           </div>
+
                           {netNeeded > 0 && (
                             <span className="text-xs text-gray-500">need {netNeeded.toFixed(1)} {ing?.recipe_unit} more</span>
+                          )}
+
+                          {/* Shopping status buttons — only shown for items to buy */}
+                          {unitsToBuy > 0 && (
+                            <div className="flex items-center gap-1.5 ml-auto">
+                              <button
+                                onClick={() => setItemStatus(line.code, status === 'full' ? null : 'full')}
+                                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all border ${
+                                  status === 'full'
+                                    ? 'bg-green-500 text-white border-green-500'
+                                    : 'bg-white text-gray-500 border-gray-200 hover:border-green-400 hover:text-green-600'
+                                }`}>
+                                ✓ Fully bought
+                              </button>
+                              <button
+                                onClick={() => setItemStatus(line.code, status === 'partial' ? null : 'partial')}
+                                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all border ${
+                                  status === 'partial'
+                                    ? 'bg-amber-400 text-white border-amber-400'
+                                    : 'bg-white text-gray-500 border-gray-200 hover:border-amber-400 hover:text-amber-600'
+                                }`}>
+                                ~ Partial
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -391,7 +486,6 @@ export default function OrderListPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Lock summary */}
             <Card>
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
@@ -420,20 +514,18 @@ export default function OrderListPage() {
               </div>
             </Card>
 
-            {/* Overall notes */}
             <Card>
               <label className="text-sm font-semibold text-gray-700 block mb-2">Overall week notes</label>
               <textarea
                 value={overallNotes}
                 onChange={e => setOverallNotes(e.target.value)}
                 onBlur={saveOverallNotes}
-                placeholder="Any general notes about this week's ordering (vendor issues, substitutions, etc.)"
+                placeholder="Any general notes about this week's ordering"
                 rows={2}
                 className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none"
               />
             </Card>
 
-            {/* Reconciliation rows grouped by category */}
             {(() => {
               const byCategory: Record<string, any[]> = {}
               for (const item of recon.items || []) {
@@ -470,7 +562,6 @@ export default function OrderListPage() {
                             <div className="flex items-start gap-3">
                               {statusIcon(status)}
                               <div className="flex-1 min-w-0">
-                                {/* Header */}
                                 <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
                                   <div>
                                     <span className="font-medium text-gray-900 text-sm">{item.ingredient_name}</span>
@@ -487,8 +578,6 @@ export default function OrderListPage() {
                                     </span>
                                   )}
                                 </div>
-
-                                {/* Vendor units comparison (prominent) */}
                                 <div className="grid grid-cols-2 gap-3 mb-2">
                                   <div className="bg-white rounded-lg p-2.5 border border-gray-100">
                                     <div className="text-xs text-gray-400 mb-0.5">System recommended</div>
@@ -497,9 +586,7 @@ export default function OrderListPage() {
                                         {item.vendor_unit_desc?.split('=')[0]?.trim()?.split(' ')[0] || 'units'}
                                       </span>
                                     </div>
-                                    <div className="text-xs text-gray-400">
-                                      = {item.recommended_recipe_qty?.toFixed(1)} {item.recipe_unit}
-                                    </div>
+                                    <div className="text-xs text-gray-400">= {item.recommended_recipe_qty?.toFixed(1)} {item.recipe_unit}</div>
                                     {item.vendor_unit_desc && (
                                       <div className="text-xs text-gray-300 mt-0.5">{item.vendor_unit_desc}</div>
                                     )}
@@ -507,7 +594,6 @@ export default function OrderListPage() {
                                   <div className={`rounded-lg p-2.5 border ${
                                     status === 'ok' ? 'bg-green-50 border-green-200' :
                                     status === 'warn' ? 'bg-amber-50 border-amber-200' :
-                                    status === 'missing' ? 'bg-red-50 border-red-200' :
                                     'bg-red-50 border-red-200'
                                   }`}>
                                     <div className="text-xs text-gray-400 mb-0.5">Actually bought</div>
@@ -518,13 +604,9 @@ export default function OrderListPage() {
                                             {item.vendor_unit_desc?.split('=')[0]?.trim()?.split(' ')[0] || 'units'}
                                           </span>
                                         </div>
-                                        <div className="text-xs text-gray-400">
-                                          = {actRecipeQty.toFixed(1)} {item.recipe_unit}
-                                        </div>
+                                        <div className="text-xs text-gray-400">= {actRecipeQty.toFixed(1)} {item.recipe_unit}</div>
                                         {actual?.lines?.map((l: any, i: number) => (
-                                          <div key={i} className="text-xs text-gray-400 mt-0.5">
-                                            {l.vendor} · {l.date}
-                                          </div>
+                                          <div key={i} className="text-xs text-gray-400 mt-0.5">{l.vendor} · {l.date}</div>
                                         ))}
                                       </>
                                     ) : (
@@ -532,16 +614,14 @@ export default function OrderListPage() {
                                     )}
                                   </div>
                                 </div>
-
-                                {/* Notes */}
                                 <div className="flex gap-2 items-start">
                                   <input
                                     type="text"
-                                    placeholder="Manager notes (e.g. vendor out of stock, bought substitute)"
+                                    placeholder="Manager notes"
                                     value={notes[item.id] || ''}
                                     onChange={e => setNotes(prev => ({ ...prev, [item.id]: e.target.value }))}
                                     onBlur={() => saveNote(item.id)}
-                                    className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                    className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-green-500"
                                   />
                                 </div>
                               </div>
