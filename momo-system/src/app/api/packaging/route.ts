@@ -4,11 +4,18 @@ export const fetchCache = 'force-no-store'
 import { createServerClient, getConfig } from '@/lib/supabase'
 import { calcPackageNeeds, calcPackagesToSend } from '@/lib/calculations'
 
+// ST items: send 1 case when truck has ≤ half remaining, else 0
+// Water is excluded — calculated per order as normal
+const ST_PACKAGES = [
+  'ST-1-BOWLS','ST-1-ALUM','ST-2-CUPS','ST-2-LIDS',
+  'ST-3-FORKS','ST-4-SPOONS','ST-4-JHOL','ST-BAGS',
+]
+
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
   const { searchParams } = new URL(req.url)
   const locationId = searchParams.get('location_id')
-  const weekStart = searchParams.get('week_start')
+  const weekStart  = searchParams.get('week_start')
   if (!locationId || !weekStart)
     return NextResponse.json({ error: 'location_id and week_start required' }, { status: 400 })
 
@@ -40,27 +47,35 @@ export async function GET(req: NextRequest) {
     .select('quantity, delivery_received, packages!inner(code)')
     .eq('location_id', locationId)
 
-  const onTruck: Record<string,number> = {}
+  const onTruck: Record<string,number>         = {}
   const onTruckDelivery: Record<string,number> = {}
-  const totalOnTruck: Record<string,number> = {}
+  const totalOnTruck: Record<string,number>    = {}
 
   for (const row of truckData||[]) {
     const code = (row.packages as any)?.code
     if (code) {
-      onTruck[code] = Number(row.quantity)||0
+      onTruck[code]         = Number(row.quantity)||0
       onTruckDelivery[code] = Number(row.delivery_received)||0
-      totalOnTruck[code] = onTruck[code] + onTruckDelivery[code]
+      totalOnTruck[code]    = onTruck[code] + onTruckDelivery[code]
     }
   }
 
+  // Base toSend calculation
   const toSend = calcPackagesToSend(needed, totalOnTruck)
+
+  // Override ST items: threshold-based (send 1 when ≤ 0.5 on truck)
+  for (const code of ST_PACKAGES) {
+    const onHand = totalOnTruck[code] ?? 0
+    toSend[code]  = onHand <= 0.5 ? 1 : 0
+    needed[code]  = toSend[code] // keep needed in sync for display
+  }
 
   const { data: packages } = await sb.from('packages')
     .select('code,name,contents,size_qty,size_unit,containers(code,name)').order('sort_order')
 
   const response = NextResponse.json({
     needed, onTruck, onTruckDelivery, totalOnTruck,
-    toSend, packages, orders, weekOrders, cfg
+    toSend, packages, orders, weekOrders, cfg,
   })
   response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
   return response
