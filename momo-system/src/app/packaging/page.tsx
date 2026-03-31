@@ -27,17 +27,24 @@ const DAY_LABELS: Record<string, string> = {
   mon:'Mon', tue:'Tue', wed:'Wed', thu:'Thu', fri:'Fri', sat:'Sat', sun:'Sun'
 }
 
+// ST items: send 1 case when truck has ≤ 0.5 remaining (employee marks half)
+// Only show on FIRST slot — supplies don't split by day
+const ST_PACKAGES = [
+  'ST-1-BOWLS','ST-1-ALUM','ST-2-CUPS','ST-2-LIDS',
+  'ST-3-FORKS','ST-4-SPOONS','ST-4-JHOL','ST-BAGS',
+]
+
 export default function PackagingPage() {
-  const [locations, setLocations]       = useState<any[]>([])
-  const [locationId, setLocationId]     = useState('')
-  const [weekStart, setWeekStart]       = useState('')
-  const [data, setData]                 = useState<any>(null)
-  const [loading, setLoading]           = useState(false)
-  const [showSchedule, setShowSchedule] = useState(false)
-  const [schedule, setSchedule]         = useState<{ label: string; days: string[] }[]>([])
+  const [locations, setLocations]           = useState<any[]>([])
+  const [locationId, setLocationId]         = useState('')
+  const [weekStart, setWeekStart]           = useState('')
+  const [data, setData]                     = useState<any>(null)
+  const [loading, setLoading]               = useState(false)
+  const [showSchedule, setShowSchedule]     = useState(false)
+  const [schedule, setSchedule]             = useState<{ label: string; days: string[] }[]>([])
   const [savingSchedule, setSavingSchedule] = useState(false)
 
-  const location = locations.find(l => l.id === locationId)
+  const location     = locations.find(l => l.id === locationId)
   const weekStartDay = location?.week_start_day ?? 'monday'
 
   useEffect(() => {
@@ -126,31 +133,30 @@ export default function PackagingPage() {
     }))
   }
 
-  // Calculate packages for a set of days using weekOrders
   const calcSlotNeeds = (days: string[], slotIdx: number) => {
     if (!data) return {}
-    // If no days configured OR only one slot, use full needed/toSend
+
+    // Single slot — use API values directly (already has ST threshold applied)
     if (!days.length || schedule.length <= 1) {
       return slotIdx === 0 ? (data.toSend ?? {}) : (data.needed ?? {})
     }
-    // Calculate per-day orders for this slot
-    const weekOrders = data.weekOrders ?? {}
+
+    // Multi-slot: calculate per-day orders for food items
+    const weekOrders  = data.weekOrders ?? {}
+    const cfg         = data.cfg ?? {}
+    const buf         = 1 + (cfg.BUF_PCT ?? 0.05)
+    const totalOnTruck = data.totalOnTruck ?? {}
+    const needed: Record<string, number> = {}
+
     const slotOrders: Record<string, number> = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
     for (const menuCode of Object.keys(slotOrders)) {
       slotOrders[menuCode] = days.reduce((sum, day) => sum + (weekOrders[menuCode]?.[day] || 0), 0)
     }
-    // Use cfg to calculate package needs for these orders
-    const cfg = data.cfg ?? {}
-    const buf = 1 + (cfg.BUF_PCT ?? 0.05)
-    const needed: Record<string, number> = {}
     const { REG, FRI, CHI, JHO, CW } = slotOrders
-    const totalOnTruck = data.totalOnTruck ?? {}
 
-    const batchRA = Math.ceil((REG+FRI+JHO) / (cfg.BATCH_RA ?? 40))
-    const batchSA = Math.ceil((REG+FRI) / (cfg.BATCH_SA ?? 40))
     const batchJH = Math.ceil(JHO / (cfg.BATCH_JH ?? 10))
-    const batchCW = Math.ceil(CW / (cfg.BATCH_CW ?? 10))
 
+    // Food packages — calculated per slot orders
     needed['FM-1']  = Math.ceil((REG+FRI+CHI+JHO)*(cfg.SERV_MM_PCS??10)/(cfg.SZ_FM1??100))
     needed['CM-1']  = Math.ceil(CHI*buf*8/(cfg.SZ_CM1??84.5))
     needed['CM-2']  = Math.ceil(CHI*4/(cfg.SZ_CM2??80))
@@ -159,22 +165,37 @@ export default function PackagingPage() {
     needed['JM-4']  = Math.ceil(JHO*(cfg.SERV_JM4_15??0.5)/15/(cfg.SZ_JM4??2))
     needed['JM-5']  = Math.ceil(JHO*0.25*0.17/(cfg.SZ_JM5??0.5))
     needed['CH-1']  = Math.ceil(CW*2.5/(cfg.SZ_CH1??80))
-    needed['CH-2']  = Math.max(0, 2 - (totalOnTruck['CH-2'] ?? 0))  // Chicken Bouillon — fixed 2
+    needed['CH-2']  = Math.max(0, 2 - (totalOnTruck['CH-2'] ?? 0))
     needed['CH-3']  = Math.ceil(CW*buf/(cfg.SZ_CH3??33.8))
     needed['CH-4']  = Math.ceil(CW*0.17/(cfg.SZ_CH4??0.5))
     needed['CH-5']  = Math.ceil(CW/(cfg.SZ_CH5??10))
     needed['CH-6']  = Math.ceil(CW*1/(cfg.SZ_CH6??80))
     needed['CH-7']  = Math.ceil(CW*6/(cfg.SZ_CH7??64))
     needed['CH-8']  = Math.ceil(CW*1/(cfg.SZ_CH6??80))
-    needed['SO-1']  = Math.max(0, 2 - (totalOnTruck['SO-1'] ?? 0))  // Canola Oil — fixed 2
-    needed['SO-2']  = Math.max(0, 2 - (totalOnTruck['SO-2'] ?? 0))  // Salt — fixed 2
+    needed['SO-1']  = Math.max(0, 2 - (totalOnTruck['SO-1'] ?? 0))
+    needed['SO-2']  = Math.max(0, 2 - (totalOnTruck['SO-2'] ?? 0))
+
+    // ST packages — threshold-based, only on first slot
+    for (const code of ST_PACKAGES) {
+      needed[code] = slotIdx === 0
+        ? ((totalOnTruck[code] ?? 0) <= 0.5 ? 1 : 0)
+        : 0
+    }
+
+    // WATER — calculated per slot orders
+    const total = REG+FRI+CHI+JHO+CW
+    needed['WATER'] = Math.ceil(total/(cfg.SZ_WAT??32))
 
     // Subtract on-truck for first slot only
     if (slotIdx === 0) {
       for (const k in needed) {
-        needed[k] = Math.max(0, needed[k] - (totalOnTruck[k] ?? 0))
+        // ST already accounts for truck; skip double-subtract
+        if (!ST_PACKAGES.includes(k)) {
+          needed[k] = Math.max(0, needed[k] - (totalOnTruck[k] ?? 0))
+        }
       }
     }
+
     return needed
   }
 
@@ -184,7 +205,6 @@ export default function PackagingPage() {
     ? `Week of ${format(weekStartDate, 'MMM d')} – ${format(weekEndDate, 'MMM d, yyyy')}`
     : '—'
 
-  // Group packages by container
   const grouped = (data?.packages ?? []).reduce((acc: Record<string, any[]>, pkg: any) => {
     const cont = pkg.containers?.code ?? 'Other'
     if (!acc[cont]) acc[cont] = []
@@ -192,7 +212,6 @@ export default function PackagingPage() {
     return acc
   }, {})
 
-  // SO added between CH and RA
   const containerOrder = ['FM','CM','JM','CH','SO','RA','SA','ST','WAT','Other']
   const sortedGroups = containerOrder
     .filter(c => grouped[c]?.length > 0)
@@ -242,7 +261,6 @@ export default function PackagingPage() {
         </div>
       ) : (
         <>
-          {/* Delivery slot columns */}
           <div className={`grid gap-4 ${schedule.length >= 2 ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
             {schedule.map((slot, slotIdx) => {
               const slotNeeds = calcSlotNeeds(slot.days, slotIdx)
@@ -305,7 +323,6 @@ export default function PackagingPage() {
             })}
           </div>
 
-          {/* On-truck summary */}
           {data.totalOnTruck && Object.values(data.totalOnTruck as Record<string,number>).some(v => v > 0) && (
             <Card>
               <h3 className="font-semibold text-gray-700 text-sm mb-3">Currently on truck</h3>
@@ -313,8 +330,7 @@ export default function PackagingPage() {
                 {Object.entries(data.totalOnTruck as Record<string,number>)
                   .filter(([,qty]) => qty > 0)
                   .map(([code, qty]) => (
-                    <span key={code}
-                      className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium">
+                    <span key={code} className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-medium">
                       {code}: {qty}
                     </span>
                   ))}
@@ -322,7 +338,6 @@ export default function PackagingPage() {
             </Card>
           )}
 
-          {/* Orders summary */}
           <Card>
             <h3 className="font-semibold text-gray-700 text-sm mb-3">This week's orders (basis for calculation)</h3>
             <div className="flex flex-wrap gap-3">
@@ -337,12 +352,11 @@ export default function PackagingPage() {
         </>
       )}
 
-      {/* Edit Schedule Modal */}
       {showSchedule && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b">
-              <h2 className="font-bold text-lg text-grayic-900">Edit Delivery Schedule</h2>
+              <h2 className="font-bold text-lg text-gray-900">Edit Delivery Schedule</h2>
               <button onClick={() => setShowSchedule(false)} className="p-1 hover:bg-gray-100 rounded-lg">
                 <X className="w-5 h-5 text-gray-500" />
               </button>
