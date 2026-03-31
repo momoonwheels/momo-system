@@ -4,10 +4,10 @@ export const fetchCache = 'force-no-store'
 import { createServerClient, getConfig, getRecipeMap, getWeeklyOrders } from '@/lib/supabase'
 import { calcIngredientNeeds, calcOrderLines } from '@/lib/calculations'
 
-// ST packages tracked by truck inventory — not recipe matrix, not Newport stock
 const ST_PACKAGES = [
   'ST-1-BOWLS','ST-1-ALUM','ST-2-CUPS','ST-2-LIDS',
   'ST-3-FORKS','ST-4-SPOONS','ST-4-JHOL','ST-BAGS',
+  'ST-NAP','ST-5-JLID','ST-6-GLOVE','ST-7-FILM',
 ]
 
 export async function GET(req: NextRequest) {
@@ -51,17 +51,17 @@ export async function GET(req: NextRequest) {
   const [cfg, recipeMap] = await Promise.all([getConfig(), getRecipeMap()])
   const needs = calcIngredientNeeds(orders, cfg, recipeMap)
 
-  // ── Fixed-stock items at Newport ───────────────────────────────────────────
+  // Fixed-stock items at Newport
   const FIXED_STOCK: Record<string, number> = {
-    'BOUL': 4,   // Chicken Bouillon — min 4 bottles at Newport
-    'COIL': 4,   // Canola Oil — min 4 containers
-    'SALT': 4,   // Salt — min 4 bottles
+    'BOUL': 2,   // Chicken Bouillon — min 2 at Newport, restock ≤1
+    'COIL': 1,   // Canola Oil — min 1 at Newport, restock ≤0.5
+    'SALT': 2,   // Salt — min 2 at Newport, restock ≤1
   }
   for (const [code, minQty] of Object.entries(FIXED_STOCK)) {
     needs[code] = minQty
   }
 
-  // ── ST items: 1 case per truck that has ≤ 0.5 remaining ───────────────────
+  // ST items: 1 case per truck that has ≤ 0.5 remaining
   const { data: allTruckData } = await sb
     .from('truck_inventory')
     .select('quantity, delivery_received, packages!inner(code)')
@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
     if ((stNeedsMap[code] ?? 0) > 0) needs[code] = stNeedsMap[code]
   }
 
-  // ── Newport inventory ──────────────────────────────────────────────────────
+  // Newport inventory
   const { data: invData } = await sb.from('newport_inventory')
     .select('quantity_on_hand, ingredients(code)')
 
@@ -88,10 +88,9 @@ export async function GET(req: NextRequest) {
     const code = (row.ingredients as any)?.code
     if (code) inventoryMap[code] = Number(row.quantity_on_hand)
   }
-  // ST items have no Newport stock — always 0
   for (const code of ST_PACKAGES) inventoryMap[code] = 0
 
-  // ── Ingredient metadata ────────────────────────────────────────────────────
+  // Ingredient metadata
   const { data: ingData } = await sb.from('ingredients')
     .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit')
     .order('sort_order')
@@ -103,7 +102,6 @@ export async function GET(req: NextRequest) {
       minOrderQty: Number(ing.min_order_qty) ?? 0,
     }
   }
-  // ST items not in ingredients table — conv=1, min=1
   for (const code of ST_PACKAGES) {
     if (!meta[code]) meta[code] = { convFactor: 1, minOrderQty: 1 }
   }
