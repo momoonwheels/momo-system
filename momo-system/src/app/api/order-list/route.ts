@@ -10,6 +10,22 @@ const ST_PACKAGES = [
   'ST-NAP','ST-5-JLID','ST-6-GLOVE','ST-7-FILM',
 ]
 
+// Fixed-stock items at Newport — min qty to maintain, reorder when below this
+// Cleaning supplies: 2 per location × 3 locations = 6 total Newport min
+const FIXED_STOCK: Record<string, number> = {
+  'BOUL':  2,   // Chicken Bouillon — min 2, restock ≤1
+  'COIL':  1,   // Canola Oil — min 1, restock ≤0.5
+  'SALT':  2,   // Salt — min 2, restock ≤1
+  'DISH':  6,   // Dishwashing Soap — 2 per location × 3
+  'CLORX': 6,   // Sanitizer — 2 per location × 3
+  'SPON':  6,   // Sponges/Scrubs — 2 per location × 3
+  'WFOIL': 3,   // Plastic Film — 1 per location × 3
+  'GLOVE': 3,   // Gloves — 1 case per location × 3
+  'PTOW':  6,   // Paper Towels — 2 per location × 3
+  'TRASH': 3,   // Trash Bags — 1 per location × 3
+  'TWLS':  6,   // Towels — 2 per location × 3
+}
+
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
   const { searchParams } = new URL(req.url)
@@ -51,12 +67,7 @@ export async function GET(req: NextRequest) {
   const [cfg, recipeMap] = await Promise.all([getConfig(), getRecipeMap()])
   const needs = calcIngredientNeeds(orders, cfg, recipeMap)
 
-  // Fixed-stock items at Newport
-  const FIXED_STOCK: Record<string, number> = {
-    'BOUL': 2,   // Chicken Bouillon — min 2 at Newport, restock ≤1
-    'COIL': 1,   // Canola Oil — min 1 at Newport, restock ≤0.5
-    'SALT': 2,   // Salt — min 2 at Newport, restock ≤1
-  }
+  // Inject fixed-stock items
   for (const [code, minQty] of Object.entries(FIXED_STOCK)) {
     needs[code] = minQty
   }
