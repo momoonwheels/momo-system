@@ -39,9 +39,10 @@ export async function GET(req: NextRequest) {
 
   const needed = calcPackageNeeds(orders, cfg)
 
+  // ── Use truck_inventory_current (log-based) instead of truck_inventory ─────
   const { data: truckData } = await sb
-    .from('truck_inventory')
-    .select('quantity, delivery_received, packages!inner(code)')
+    .from('truck_inventory_current')
+    .select('*')
     .eq('location_id', locationId)
 
   const onTruck: Record<string,number>         = {}
@@ -49,11 +50,13 @@ export async function GET(req: NextRequest) {
   const totalOnTruck: Record<string,number>    = {}
 
   for (const row of truckData||[]) {
-    const code = (row.packages as any)?.code
+    const code = row.code
     if (code) {
-      onTruck[code]         = Number(row.quantity)||0
-      onTruckDelivery[code] = Number(row.delivery_received)||0
-      totalOnTruck[code]    = onTruck[code] + onTruckDelivery[code]
+      // truck_inventory_current has current_on_hand as the live value
+      const onHand = Number(row.current_on_hand) || 0
+      onTruck[code]         = onHand
+      onTruckDelivery[code] = 0  // log system doesn't split this way
+      totalOnTruck[code]    = onHand
     }
   }
 
