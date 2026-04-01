@@ -20,12 +20,16 @@ export async function GET(req: NextRequest) {
 
   if (!lock) return NextResponse.json({ locked: false })
 
-  // Get actual purchased this week from confirmed receipts
-  // Match receipt_line_items to ingredients via matched_ingredient_id
-  const weekEnd = new Date(weekStart)
-  weekEnd.setDate(weekEnd.getDate() + 7)
-  const weekEndStr = weekEnd.toISOString().split('T')[0]
+  // FIX 1: Look 14 days BEFORE week start through 7 days AFTER
+  // Receipts arrive before the week starts (you buy ingredients in advance)
+  const windowStart = new Date(weekStart + 'T12:00:00')
+  windowStart.setDate(windowStart.getDate() - 14)
+  const windowEnd = new Date(weekStart + 'T12:00:00')
+  windowEnd.setDate(windowEnd.getDate() + 7)
+  const windowStartStr = windowStart.toISOString().split('T')[0]
+  const windowEndStr   = windowEnd.toISOString().split('T')[0]
 
+  // FIX 2: use matched_ingredient_id (not ingredient_id)
   const { data: receiptLines } = await sb
     .from('receipt_line_items')
     .select(`
@@ -34,13 +38,14 @@ export async function GET(req: NextRequest) {
       unit,
       raw_text,
       status,
+      matched_ingredient_id,
       receipts!inner(receipt_date, vendor_name, status),
-      ingredients(code, name)
+      ingredients!matched_ingredient_id(code, name)
     `)
     .eq('status', 'confirmed')
-    .gte('receipts.receipt_date', weekStart)
-    .lte('receipts.receipt_date', weekEndStr)
-    .not('ingredient_id', 'is', null)
+    .gte('receipts.receipt_date', windowStartStr)
+    .lte('receipts.receipt_date', windowEndStr)
+    .not('matched_ingredient_id', 'is', null)
 
   // Sum actual qty by ingredient code
   const actualByCode: Record<string, { qty: number; cost: number; lines: any[] }> = {}
@@ -48,27 +53,27 @@ export async function GET(req: NextRequest) {
     const code = (line.ingredients as any)?.code
     if (!code) continue
     if (!actualByCode[code]) actualByCode[code] = { qty: 0, cost: 0, lines: [] }
-    actualByCode[code].qty += Number(line.quantity) || 0
+    actualByCode[code].qty  += Number(line.quantity)    || 0
     actualByCode[code].cost += Number(line.total_price) || 0
     actualByCode[code].lines.push({
       raw_text: line.raw_text,
-      qty: line.quantity,
-      unit: line.unit,
-      vendor: (line.receipts as any)?.vendor_name,
-      date: (line.receipts as any)?.receipt_date,
+      qty:      line.quantity,
+      unit:     line.unit,
+      vendor:   (line.receipts as any)?.vendor_name,
+      date:     (line.receipts as any)?.receipt_date,
     })
   }
 
   return NextResponse.json({
     locked: true,
     lock: {
-      id: lock.id,
-      week_start: lock.week_start,
-      locked_at: lock.locked_at,
-      locked_by: lock.locked_by,
+      id:            lock.id,
+      week_start:    lock.week_start,
+      locked_at:     lock.locked_at,
+      locked_by:     lock.locked_by,
       overall_notes: lock.overall_notes,
     },
-    items: lock.order_lock_items,
+    items:  lock.order_lock_items,
     actual: actualByCode,
   })
 }
@@ -78,13 +83,10 @@ export async function POST(req: NextRequest) {
   const sb = createServerClient()
   const body = await req.json()
   const { week_start, items } = body
-  // items = array of { ingredient_code, ingredient_name, category, recipe_unit,
-  //                    vendor_unit_desc, conv_factor, recommended_recipe_qty, recommended_vendor_qty }
 
   if (!week_start || !items?.length)
     return NextResponse.json({ error: 'week_start and items required' }, { status: 400 })
 
-  // Upsert lock row
   const { data: lock, error: lockErr } = await sb
     .from('order_lock')
     .upsert({ week_start }, { onConflict: 'week_start' })
@@ -93,17 +95,16 @@ export async function POST(req: NextRequest) {
 
   if (lockErr) return NextResponse.json({ error: lockErr.message }, { status: 500 })
 
-  // Delete old items and reinsert (fresh snapshot)
   await sb.from('order_lock_items').delete().eq('lock_id', lock.id)
 
   const lockItems = items.map((item: any) => ({
-    lock_id: lock.id,
-    ingredient_code: item.ingredient_code,
-    ingredient_name: item.ingredient_name,
-    category: item.category || '',
-    recipe_unit: item.recipe_unit || '',
-    vendor_unit_desc: item.vendor_unit_desc || '',
-    conv_factor: item.conv_factor || 1,
+    lock_id:                lock.id,
+    ingredient_code:        item.ingredient_code,
+    ingredient_name:        item.ingredient_name,
+    category:               item.category               || '',
+    recipe_unit:            item.recipe_unit            || '',
+    vendor_unit_desc:       item.vendor_unit_desc       || '',
+    conv_factor:            item.conv_factor            || 1,
     recommended_recipe_qty: item.recommended_recipe_qty || 0,
     recommended_vendor_qty: item.recommended_vendor_qty || 0,
   }))
@@ -114,7 +115,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, lock_id: lock.id, items_saved: lockItems.length })
 }
 
-// PATCH: update manager notes on a line item or overall notes
+// PATCH: update manager notes
 export async function PATCH(req: NextRequest) {
   const sb = createServerClient()
   const body = await req.json()
