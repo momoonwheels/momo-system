@@ -4,15 +4,15 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ClipboardList, Package, ShoppingCart,
   Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users,
-  TrendingUp, Banknote, FileText, X, LogOut
+  TrendingUp, Banknote, FileText, X, LogOut, Warehouse
 } from 'lucide-react'
-
 const nav = [
   { href: '/dashboard',        icon: LayoutDashboard, label: 'Dashboard'        },
   { href: '/planned-orders',   icon: ClipboardList,   label: 'Planned Orders'   },
   { href: '/truck-inventory',  icon: Truck,           label: 'Truck Inventory'  },
   { href: '/packaging',        icon: Package,         label: 'Packaging'        },
   { href: '/order-list',       icon: ShoppingCart,    label: 'Order List'       },
+  { href: '/fixed-inventory',  icon: Warehouse,       label: 'Fixed Inventory'  },
   { href: '/receipts',         icon: Receipt,         label: 'Receipts & COGS'  },
   { href: '/recipe-matrix',    icon: BookOpen,        label: 'Recipe Matrix'    },
   { href: '/config',           icon: Settings,        label: 'Configuration'    },
@@ -21,10 +21,8 @@ const nav = [
   { href: '/cash-flow',        icon: Banknote,        label: 'Cash Flow'        },
   { href: '/weekly-report',    icon: FileText,        label: 'Weekly Report'    },
 ]
-
 export default function Sidebar({ onClose }: { onClose?: () => void }) {
   const path = usePathname()
-
   return (
     <div className="w-64 bg-brand-900 text-white flex flex-col h-full">
       <div className="p-5 border-b border-brand-800">
@@ -44,7 +42,6 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
         </div>
         <div className="text-xs text-brand-400 mt-1.5">Newport Operations</div>
       </div>
-
       <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
         {nav.map(({ href, icon: Icon, label }) => {
           const active = path === href || path.startsWith(href + '/')
@@ -61,7 +58,6 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
           )
         })}
       </nav>
-
       <div className="p-3 border-t border-brand-800">
         <button
           onClick={async () => {
