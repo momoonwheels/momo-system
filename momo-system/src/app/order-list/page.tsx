@@ -556,7 +556,7 @@ export default function OrderListPage() {
                         const conv = Number(item.conv_factor) || 1
                         const recVendorQty = item.recommended_vendor_qty
                         const actVendorQty = conv > 0 ? actRecipeQty / conv : 0
-                        const status = getVarianceStatus(item.recommended_recipe_qty, actRecipeQty, conv)
+                        const status = getVarianceStatus(recVendorQty, actVendorQty, 1)
                         const diff = actVendorQty - recVendorQty
                         const diffPct = recVendorQty > 0 ? ((diff / recVendorQty) * 100).toFixed(0) : null
 
