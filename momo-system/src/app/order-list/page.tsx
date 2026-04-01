@@ -87,7 +87,7 @@ export default function OrderListPage() {
       setRecon(json)
       if (json.lock?.overall_notes) setOverallNotes(json.lock.overall_notes)
       const n: Record<string,string> = {}
-      for (const item of json.items || []) {
+      for (const item of (recon.items || []).filter((i: any) => i.recommended_vendor_qty > 0)) {
         if (item.manager_notes) n[item.id] = item.manager_notes
       }
       setNotes(n)
