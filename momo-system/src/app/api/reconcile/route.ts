@@ -6,43 +6,28 @@ const sb = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url)
-
-  // Return unmatched receipts (no SQL match found)
-  if (searchParams.get('unmatched') === '1') {
-    const { data } = await sb
-      .from('receipts')
-      .select('id, vendor_name, receipt_date, total_amount')
-      .eq('status', 'confirmed')
-      .not('total_amount', 'is', null)
-      .not('receipt_date', 'is', null)
-      .is('matched_transaction_id', null)
-    return NextResponse.json({ unmatched: data || [] })
-  }
-
-  // Try the SQL function first
-  const { data: matches, error } = await sb.rpc('find_receipt_matches')
+export async function GET() {
+  const { data: rows, error } = await sb.rpc('find_receipt_matches')
 
   if (error) {
-    console.error('RPC error, falling back:', error)
-    // Fallback: return raw data for client-side matching
-    const { data: receipts } = await sb
-      .from('receipts')
-      .select('id, vendor_name, receipt_date, total_amount, matched_transaction_id')
-      .eq('status', 'confirmed')
-      .not('total_amount', 'is', null)
-      .not('receipt_date', 'is', null)
-
-    const { data: txns } = await sb
-      .from('bank_transactions')
-      .select('id, description, transaction_date, debit_amount, matched_receipt_id')
-      .gt('debit_amount', 0)
-
-    return NextResponse.json({ matches: receipts || [], txns: txns || [], useClientSide: true })
+    console.error('find_receipt_matches error:', error)
+    return NextResponse.json({ suggested: [], confirmed: [], unmatched: [], error: error.message })
   }
 
-  return NextResponse.json({ matches: matches || [], useClientSide: false })
+  const matchedReceiptIds = new Set((rows || []).map((r: any) => r.receipt_id))
+  const confirmed = (rows || []).filter((r: any) => r.is_confirmed)
+  const suggested = (rows || []).filter((r: any) => !r.is_confirmed)
+
+  const { data: allReceipts } = await sb
+    .from('receipts')
+    .select('receipt_id:id, vendor_name, receipt_date, total_amount')
+    .eq('status', 'confirmed')
+    .not('total_amount', 'is', null)
+    .not('receipt_date', 'is', null)
+
+  const unmatched = (allReceipts || []).filter((r: any) => !matchedReceiptIds.has(r.receipt_id))
+
+  return NextResponse.json({ suggested, confirmed, unmatched })
 }
 
 export async function POST(req: Request) {
