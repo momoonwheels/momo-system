@@ -13,9 +13,9 @@ const ST_PACKAGES = [
 // Fixed-stock items at Newport — min qty to maintain, reorder when below this
 // Cleaning supplies: 2 per location × 3 locations = 6 total Newport min
 const FIXED_STOCK: Record<string, number> = {
-  'BOUL':  2,   // Chicken Bouillon — min 2, restock ≤1
-  'COIL':  1,   // Canola Oil — min 1, restock ≤0.5
-  'SALT':  2,   // Salt — min 2, restock ≤1
+  'BOUL':  192,  // 6 bottles × 32 oz (2 per location × 3)
+  'COIL':  105,  // 3 containers × 35 lbs (1 per location × 3)
+  'SALT':  96,   // 6 bottles × 16 oz (2 per location × 3)
   'DISH':  6,   // Dishwashing Soap — 2 per location × 3
   'CLORX': 6,   // Sanitizer — 2 per location × 3
   'SPON':  6,   // Sponges/Scrubs — 2 per location × 3
