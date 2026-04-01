@@ -7,12 +7,14 @@ import LoadingSpinner from '@/components/ui/LoadingSpinner'
 import Badge from '@/components/ui/Badge'
 import { Receipt, Upload, CheckCircle, XCircle, DollarSign, Trash2, AlertCircle, GitMerge } from 'lucide-react'
 
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
 export default function ReceiptsPage() {
-  const [receipts, setReceipts] = useState<any[]>([])
+  const [receipts, setReceipts]     = useState<any[]>([])
   const [ingredients, setIngredients] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
-  const [tab, setTab] = useState<'list' | 'upload' | 'reconcile' | 'cogs'>('list')
+  const [loading, setLoading]       = useState(true)
+  const [uploading, setUploading]   = useState(false)
+  const [tab, setTab]               = useState<'list'|'upload'|'reconcile'|'cogs'>('list')
 
   const loadReceipts = useCallback(async () => {
     const res = await fetch('/api/receipts')
@@ -42,7 +44,7 @@ export default function ReceiptsPage() {
         body: JSON.stringify({ image_base64: base64 })
       })
       const data = await res.json()
-      if (data.ocr_failed) toast.error('OCR failed — receipt saved for manual entry')
+      if (data.ocr_failed) toast.error('OCR failed — use manual entry below')
       else toast.success('Receipt processed! Review matches below.')
       setUploading(false)
       loadReceipts()
@@ -129,11 +131,11 @@ export default function ReceiptsPage() {
   }
 
   const statusBadge = (s: string) => {
-    const map: Record<string, any> = {
-      confirmed: { label: 'Confirmed', color: 'green' },
-      reviewing: { label: 'Reviewing', color: 'yellow' },
-      rejected: { label: 'Rejected', color: 'red' },
-      pending: { label: 'Pending', color: 'gray' },
+    const map: Record<string,any> = {
+      confirmed: { label:'Confirmed', color:'green' },
+      reviewing: { label:'Reviewing', color:'yellow' },
+      rejected:  { label:'Rejected',  color:'red'   },
+      pending:   { label:'Pending',   color:'gray'  },
     }
     const b = map[s] || map.pending
     return <Badge label={b.label} color={b.color} />
@@ -150,10 +152,10 @@ export default function ReceiptsPage() {
   }
 
   const tabs = [
-    { key: 'list', label: 'Receipts' },
-    { key: 'upload', label: 'Upload' },
-    { key: 'reconcile', label: 'Reconciliation' },
-    { key: 'cogs', label: 'COGS History' },
+    { key:'list',      label:'Receipts'       },
+    { key:'upload',    label:'Upload'         },
+    { key:'reconcile', label:'Reconciliation' },
+    { key:'cogs',      label:'COGS History'   },
   ]
 
   return (
@@ -175,28 +177,16 @@ export default function ReceiptsPage() {
         }
       />
 
+      {/* ── Upload ── */}
       {tab === 'upload' && (
-        <Card>
-          <h2 className="font-semibold text-gray-900 mb-2">Upload Receipt</h2>
-          <p className="text-sm text-gray-500 mb-6">Take a photo or screenshot of your receipt. AI will parse it and match items to your inventory.</p>
-          <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-brand-300 rounded-xl cursor-pointer bg-brand-50 hover:bg-brand-100 transition-colors">
-            {uploading ? (
-              <div className="flex flex-col items-center gap-3">
-                <div className="w-8 h-8 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-brand-600">Parsing receipt with AI...</p>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center gap-3">
-                <Upload className="w-10 h-10 text-brand-400" />
-                <p className="text-sm text-brand-600 font-medium">Click to upload receipt image</p>
-                <p className="text-xs text-gray-400">JPG, PNG, or screenshot</p>
-              </div>
-            )}
-            <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
-          </label>
-        </Card>
+        <UploadSection
+          uploading={uploading}
+          onFileUpload={handleFileUpload}
+          onTextParsed={() => { loadReceipts(); setTab('list') }}
+        />
       )}
 
+      {/* ── Receipt List ── */}
       {tab === 'list' && (
         loading ? <LoadingSpinner /> : (
           <div className="space-y-6">
@@ -212,11 +202,13 @@ export default function ReceiptsPage() {
                 {/* Header */}
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <h3 className="font-semibold text-gray-900 text-base">{r.vendor_name || 'Unknown Vendor'}</h3>
+                    <h3 className="font-semibold text-gray-900 text-base">
+                      {r.vendor_name || <span className="text-amber-500 italic">No vendor — manual entry needed</span>}
+                    </h3>
                     <div className="flex items-center gap-2 mt-1">
                       <input
                         type="date"
-                        defaultValue={r.receipt_date}
+                        defaultValue={r.receipt_date || ''}
                         onBlur={e => { if (e.target.value !== r.receipt_date) updateReceiptDate(r.id, e.target.value) }}
                         className="text-sm text-gray-500 border border-gray-200 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
                       />
@@ -237,8 +229,17 @@ export default function ReceiptsPage() {
                   </div>
                 </div>
 
-                {/* Line items */}
-                {r.receipt_line_items?.length > 0 && (
+                {/* ── Manual entry for OCR-failed receipts ── */}
+                {!r.vendor_name && (
+                  <ManualEntryForm
+                    receipt={r}
+                    ingredients={ingredients}
+                    onSaved={loadReceipts}
+                  />
+                )}
+
+                {/* ── Line items (normal OCR receipts) ── */}
+                {r.vendor_name && r.receipt_line_items?.length > 0 && (
                   <>
                     {/* Column headers */}
                     <div className="grid grid-cols-12 gap-2 px-3 pb-1 text-xs text-gray-400 font-medium">
@@ -260,23 +261,18 @@ export default function ReceiptsPage() {
                             : conf >= 0.5
                             ? 'bg-yellow-50 border-yellow-100'
                             : 'bg-red-50 border-red-100'
-
                           return (
                             <div key={line.id} className={`grid grid-cols-12 gap-2 items-center border rounded-lg px-3 py-2 ${rowBg}`}>
-                              {/* Receipt text */}
                               <div className="col-span-4 min-w-0">
                                 <p className="text-xs font-mono text-gray-600 truncate" title={line.raw_text}>{line.raw_text}</p>
                               </div>
-                              {/* Qty / Price */}
                               <div className="col-span-2 text-center">
                                 <p className="text-xs text-gray-600">{line.quantity || '?'} {line.unit}</p>
                                 {line.unit_price && <p className="text-xs text-gray-500">${Number(line.unit_price).toFixed(2)}</p>}
                               </div>
-                              {/* Confidence */}
                               <div className="col-span-1 flex justify-center">
                                 {confBadge(conf)}
                               </div>
-                              {/* Match dropdown */}
                               <div className="col-span-3">
                                 <select
                                   value={line.matched_ingredient_id || ''}
@@ -289,7 +285,6 @@ export default function ReceiptsPage() {
                                   ))}
                                 </select>
                               </div>
-                              {/* Actions */}
                               <div className="col-span-2 flex justify-center gap-1">
                                 {line.status === 'pending' ? (
                                   <>
@@ -331,7 +326,6 @@ export default function ReceiptsPage() {
                       </details>
                     )}
 
-                    {/* Confirm all */}
                     {r.status === 'reviewing' && (
                       <div className="mt-4 flex items-center justify-between pt-3 border-t border-gray-100">
                         <p className="text-xs text-gray-500">Fix any wrong matches above, then confirm</p>
@@ -356,21 +350,302 @@ export default function ReceiptsPage() {
   )
 }
 
+// ─── Upload Section (Image + Paste Text) ─────────────────────────────────────
+
+function UploadSection({ uploading, onFileUpload, onTextParsed }: {
+  uploading: boolean
+  onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onTextParsed: () => void
+}) {
+  const [mode, setMode]         = useState<'image'|'text'>('image')
+  const [pasteText, setPasteText] = useState('')
+  const [parsing, setParsing]   = useState(false)
+
+  const handlePasteSubmit = async () => {
+    if (!pasteText.trim()) { toast.error('Paste receipt text first'); return }
+    setParsing(true)
+    try {
+      const res = await fetch('/api/receipts/parse-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: pasteText })
+      })
+      const data = await res.json()
+      if (data.error) {
+        toast.error(`Parse failed: ${data.error}`)
+      } else {
+        toast.success(`Receipt parsed — ${data.line_count} items found. Review matches below.`)
+        setPasteText('')
+        onTextParsed()
+      }
+    } catch (e) {
+      toast.error('Failed to parse receipt')
+    }
+    setParsing(false)
+  }
+
+  return (
+    <Card>
+      <h2 className="font-semibold text-gray-900 mb-4">Add Receipt</h2>
+
+      {/* Mode toggle */}
+      <div className="flex gap-2 mb-6">
+        <button onClick={() => setMode('image')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+            mode === 'image' ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}>
+          📷 Upload Image
+        </button>
+        <button onClick={() => setMode('text')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+            mode === 'text' ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}>
+          📋 Paste Text
+        </button>
+      </div>
+
+      {/* Image upload */}
+      {mode === 'image' && (
+        <>
+          <p className="text-sm text-gray-500 mb-4">Take a photo or screenshot of your receipt.</p>
+          <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-brand-300 rounded-xl cursor-pointer bg-brand-50 hover:bg-brand-100 transition-colors">
+            {uploading ? (
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-2 border-brand-600 border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm text-brand-600">Parsing receipt with AI...</p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3">
+                <Upload className="w-10 h-10 text-brand-400" />
+                <p className="text-sm text-brand-600 font-medium">Click to upload receipt image</p>
+                <p className="text-xs text-gray-400">JPG, PNG, or screenshot</p>
+              </div>
+            )}
+            <input type="file" accept="image/*" className="hidden" onChange={onFileUpload} />
+          </label>
+        </>
+      )}
+
+      {/* Text paste */}
+      {mode === 'text' && (
+        <>
+          <p className="text-sm text-gray-500 mb-4">
+            Copy the receipt text from your email or PDF and paste it below. AI will extract all items automatically.
+          </p>
+          <textarea
+            value={pasteText}
+            onChange={e => setPasteText(e.target.value)}
+            placeholder="Paste receipt text here..."
+            rows={16}
+            className="w-full text-xs font-mono border border-gray-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-brand-400 resize-y bg-gray-50"
+          />
+          <div className="mt-3 flex items-center justify-between">
+            <p className="text-xs text-gray-400">{pasteText.length} characters</p>
+            <div className="flex gap-2">
+              <button onClick={() => setPasteText('')} disabled={!pasteText}
+                className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 disabled:opacity-30">
+                Clear
+              </button>
+              <button onClick={handlePasteSubmit} disabled={parsing || !pasteText.trim()}
+                className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                {parsing ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Parsing...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-4 h-4" />
+                    Parse Receipt
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
+// ─── Manual Entry Form ────────────────────────────────────────────────────────
+
+function ManualEntryForm({ receipt, ingredients, onSaved }: {
+  receipt: any
+  ingredients: any[]
+  onSaved: () => void
+}) {
+  const [vendor, setVendor]   = useState(receipt.vendor_name || '')
+  const [date, setDate]       = useState(receipt.receipt_date || new Date().toISOString().split('T')[0])
+  const [total, setTotal]     = useState(receipt.total_amount || '')
+  const [saving, setSaving]   = useState(false)
+  const [lines, setLines]     = useState<any[]>([
+    { ingredientId: '', qty: '1', unit: 'CS', unitPrice: '', totalPrice: '' }
+  ])
+
+  const UNITS = ['CS','EA','LB','OZ','PK','BX','BG','CT']
+
+  const addLine = () =>
+    setLines(l => [...l, { ingredientId: '', qty: '1', unit: 'CS', unitPrice: '', totalPrice: '' }])
+
+  const removeLine = (i: number) =>
+    setLines(l => l.filter((_, idx) => idx !== i))
+
+  const updateLine = (i: number, field: string, val: string) => {
+    setLines(l => l.map((line, idx) => {
+      if (idx !== i) return line
+      const updated = { ...line, [field]: val }
+      if ((field === 'qty' || field === 'unitPrice') && updated.qty && updated.unitPrice) {
+        updated.totalPrice = (parseFloat(updated.qty) * parseFloat(updated.unitPrice)).toFixed(2)
+      }
+      return updated
+    }))
+  }
+
+  const save = async () => {
+    if (!vendor || !date) { toast.error('Vendor and date are required'); return }
+    setSaving(true)
+    const sb = (await import('@/lib/supabase')).supabase
+
+    await sb.from('receipts').update({
+      vendor_name: vendor,
+      receipt_date: date,
+      total_amount: total ? parseFloat(total) : null,
+      status: 'reviewing'
+    }).eq('id', receipt.id)
+
+    const validLines = lines.filter(l => l.ingredientId && l.unitPrice)
+    for (const line of validLines) {
+      const ing = ingredients.find(i => i.id === line.ingredientId)
+      await sb.from('receipt_line_items').insert({
+        receipt_id: receipt.id,
+        raw_text: ing ? `${ing.code} — ${ing.name} (manual)` : 'Manual entry',
+        matched_ingredient_id: line.ingredientId,
+        match_confidence: 1.0,
+        quantity: parseFloat(line.qty) || null,
+        unit: line.unit || null,
+        unit_price: parseFloat(line.unitPrice),
+        total_price: line.totalPrice ? parseFloat(line.totalPrice) : null,
+        status: 'pending'
+      })
+    }
+
+    toast.success(`Receipt saved with ${validLines.length} line item${validLines.length !== 1 ? 's' : ''}`)
+    setSaving(false)
+    onSaved()
+  }
+
+  return (
+    <div className="border border-amber-200 bg-amber-50 rounded-xl p-4 space-y-4">
+      <p className="text-xs font-medium text-amber-700 flex items-center gap-1.5">
+        <AlertCircle className="w-3.5 h-3.5" />
+        OCR could not read this receipt — enter the details manually
+      </p>
+
+      {/* Vendor / Date / Total */}
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="text-xs text-gray-600 mb-1 block font-medium">Vendor *</label>
+          <input value={vendor} onChange={e => setVendor(e.target.value)}
+            placeholder="e.g. ChefStore"
+            className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-brand-400" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-600 mb-1 block font-medium">Date *</label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+            className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-brand-400" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-600 mb-1 block font-medium">Total ($)</label>
+          <input type="number" step="0.01" value={total} onChange={e => setTotal(e.target.value)}
+            placeholder="0.00"
+            className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-brand-400" />
+        </div>
+      </div>
+
+      {/* Line items */}
+      <div>
+        <p className="text-xs font-medium text-gray-600 mb-2">Line items</p>
+        <div className="grid grid-cols-12 gap-2 mb-1 text-xs text-gray-400 px-1">
+          <div className="col-span-5">Ingredient</div>
+          <div className="col-span-1 text-center">Qty</div>
+          <div className="col-span-1 text-center">Unit</div>
+          <div className="col-span-2 text-center">Unit $</div>
+          <div className="col-span-2 text-center">Total $</div>
+          <div className="col-span-1"></div>
+        </div>
+        <div className="space-y-1.5">
+          {lines.map((line, i) => (
+            <div key={i} className="grid grid-cols-12 gap-2 items-center bg-white border border-gray-200 rounded-lg px-2 py-1.5">
+              <div className="col-span-5">
+                <select value={line.ingredientId} onChange={e => updateLine(i, 'ingredientId', e.target.value)}
+                  className="w-full text-xs border border-gray-200 rounded px-1.5 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-brand-400">
+                  <option value="">— Select ingredient —</option>
+                  {ingredients.map(ing => (
+                    <option key={ing.id} value={ing.id}>{ing.code} · {ing.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="col-span-1">
+                <input type="number" value={line.qty} onChange={e => updateLine(i, 'qty', e.target.value)}
+                  placeholder="1"
+                  className="w-full text-xs border border-gray-200 rounded px-1.5 py-1 text-center focus:outline-none focus:ring-1 focus:ring-brand-400" />
+              </div>
+              <div className="col-span-1">
+                <select value={line.unit} onChange={e => updateLine(i, 'unit', e.target.value)}
+                  className="w-full text-xs border border-gray-200 rounded px-1 py-1 bg-white focus:outline-none">
+                  {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+              <div className="col-span-2">
+                <input type="number" step="0.01" value={line.unitPrice} onChange={e => updateLine(i, 'unitPrice', e.target.value)}
+                  placeholder="0.00"
+                  className="w-full text-xs border border-gray-200 rounded px-1.5 py-1 text-center focus:outline-none focus:ring-1 focus:ring-brand-400" />
+              </div>
+              <div className="col-span-2">
+                <input type="number" step="0.01" value={line.totalPrice} onChange={e => updateLine(i, 'totalPrice', e.target.value)}
+                  placeholder="auto"
+                  className="w-full text-xs border border-gray-100 bg-gray-50 rounded px-1.5 py-1 text-center text-gray-500 focus:outline-none" />
+              </div>
+              <div className="col-span-1 flex justify-center">
+                {lines.length > 1 && (
+                  <button onClick={() => removeLine(i)} title="Remove"
+                    className="p-1 text-red-400 hover:bg-red-50 rounded">
+                    <XCircle className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={addLine}
+          className="mt-2 text-xs text-brand-600 hover:underline">
+          + Add another line
+        </button>
+      </div>
+
+      <div className="flex justify-end">
+        <button onClick={save} disabled={saving}
+          className="flex items-center gap-2 px-5 py-2 bg-brand-600 text-white text-sm rounded-lg hover:bg-brand-700 disabled:opacity-50">
+          <CheckCircle className="w-4 h-4" />
+          {saving ? 'Saving…' : 'Save Receipt'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Reconciliation ───────────────────────────────────────────────────────────
 
 function ReconcileView() {
-  const [data, setData] = useState<any>(null)
+  const [data, setData]     = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [acting, setActing] = useState<string | null>(null)
+  const [acting, setActing] = useState<string|null>(null)
 
   const load = async () => {
     setLoading(true)
-    try {
-      const res = await fetch('/api/reconcile')
-      setData(await res.json())
-    } catch (e) {
-      console.error('Reconcile load error:', e)
-    }
+    try { const res = await fetch('/api/reconcile'); setData(await res.json()) }
+    catch (e) { console.error('Reconcile load error:', e) }
     setLoading(false)
   }
 
@@ -379,23 +654,19 @@ function ReconcileView() {
   const confirmMatch = async (receiptId: string, txnId: string) => {
     setActing(receiptId)
     await fetch('/api/reconcile', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ receipt_id: receiptId, txn_id: txnId, action: 'confirm' })
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ receipt_id: receiptId, txn_id: txnId, action:'confirm' })
     })
     toast.success('Match confirmed!')
-    setActing(null)
-    load()
+    setActing(null); load()
   }
 
   const unmatch = async (receiptId: string, txnId: string) => {
     await fetch('/api/reconcile', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ receipt_id: receiptId, txn_id: txnId, action: 'unmatch' })
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ receipt_id: receiptId, txn_id: txnId, action:'unmatch' })
     })
-    toast.success('Match removed')
-    load()
+    toast.success('Match removed'); load()
   }
 
   if (loading) return <LoadingSpinner />
@@ -407,18 +678,16 @@ function ReconcileView() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-green-50 border border-green-100 rounded-xl p-4">
-          <p className="text-xs text-green-600 mb-1">Confirmed matches</p>
-          <p className="text-2xl font-semibold text-green-700">{confirmed.length}</p>
-        </div>
-        <div className="bg-yellow-50 border border-yellow-100 rounded-xl p-4">
-          <p className="text-xs text-yellow-600 mb-1">Suggested matches</p>
-          <p className="text-2xl font-semibold text-yellow-700">{suggested.length}</p>
-        </div>
-        <div className="bg-red-50 border border-red-100 rounded-xl p-4">
-          <p className="text-xs text-red-600 mb-1">No bank match found</p>
-          <p className="text-2xl font-semibold text-red-700">{unmatched.length}</p>
-        </div>
+        {[
+          { label:'Confirmed matches', val:confirmed.length, bg:'green' },
+          { label:'Suggested matches', val:suggested.length, bg:'yellow' },
+          { label:'No bank match',     val:unmatched.length, bg:'red'   },
+        ].map(({ label, val, bg }) => (
+          <div key={label} className={`bg-${bg}-50 border border-${bg}-100 rounded-xl p-4`}>
+            <p className={`text-xs text-${bg}-600 mb-1`}>{label}</p>
+            <p className={`text-2xl font-semibold text-${bg}-700`}>{val}</p>
+          </div>
+        ))}
       </div>
 
       {suggested.length > 0 && (
@@ -458,8 +727,7 @@ function ReconcileView() {
       {confirmed.length > 0 && (
         <Card>
           <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-500" />
-            Confirmed matches
+            <CheckCircle className="w-4 h-4 text-green-500" /> Confirmed matches
           </h2>
           <div className="space-y-2">
             {confirmed.map((m: any) => (
@@ -484,8 +752,7 @@ function ReconcileView() {
       {unmatched.length > 0 && (
         <Card>
           <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <XCircle className="w-4 h-4 text-red-400" />
-            No bank transaction found
+            <XCircle className="w-4 h-4 text-red-400" /> No bank transaction found
           </h2>
           <p className="text-xs text-gray-500 mb-3">No matching bank transaction within $1 and 3 days.</p>
           <div className="space-y-2">
@@ -519,19 +786,20 @@ function ReconcileView() {
 
 function COGSView() {
   const [locationId, setLocationId] = useState('')
-  const [locations, setLocations] = useState<any[]>([])
-  const [weekStart, setWeekStart] = useState('')
-  const [data, setData] = useState<any>(null)
-  const [loading, setLoading] = useState(false)
+  const [locations, setLocations]   = useState<any[]>([])
+  const [weekStart, setWeekStart]   = useState('')
+  const [data, setData]             = useState<any>(null)
+  const [loading, setLoading]       = useState(false)
 
   useEffect(() => {
     const { format: fmt, startOfWeek: sow } = require('date-fns')
-    setWeekStart(fmt(sow(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'))
+    setWeekStart(fmt(sow(new Date(), { weekStartsOn:1 }), 'yyyy-MM-dd'))
     import('@/lib/supabase').then(({ supabase }) => {
-      supabase.from('locations').select('*').eq('active', true).eq('type', 'newport').then(({ data: locs }) => {
-        setLocations(locs || [])
-        if (locs?.[0]) setLocationId(locs[0].id)
-      })
+      supabase.from('locations').select('*').eq('active',true).eq('type','newport')
+        .then(({ data: locs }) => {
+          setLocations(locs || [])
+          if (locs?.[0]) setLocationId(locs[0].id)
+        })
     })
   }, [])
 
@@ -544,7 +812,7 @@ function COGSView() {
       .catch(() => setLoading(false))
   }, [locationId, weekStart])
 
-  const totalCOGS = data?.cogs?.reduce((sum: number, c: any) => sum + (c.totalCost || 0), 0) || 0
+  const totalCOGS = data?.cogs?.reduce((sum: number, c: any) => sum + (c.totalCost||0), 0) || 0
 
   return (
     <div>
@@ -560,36 +828,42 @@ function COGSView() {
         )}
       </div>
       {loading ? <LoadingSpinner /> : data?.cogs ? (
-        data.cogs.filter((c: any) => c.totalCost > 0).length === 0 ? (
+        data.cogs.filter((c:any) => c.totalCost > 0).length === 0 ? (
           <Card>
             <div className="text-center py-12 text-gray-500">
               <p className="font-medium">No COGS data yet</p>
-              <p className="text-sm mt-1">Confirm receipts first, then COGS will calculate automatically</p>
+              <p className="text-sm mt-1">Confirm receipts first</p>
             </div>
           </Card>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-4">
-            {data.cogs.filter((c: any) => c.totalCost > 0).map((ctx: any) => (
+            {data.cogs.filter((c:any) => c.totalCost > 0).map((ctx: any) => (
               <Card key={ctx.context}>
                 <div className="flex justify-between items-start mb-3">
                   <h3 className="font-semibold text-gray-900">{ctx.label}</h3>
                   <span className="text-sm font-bold text-brand-700">${ctx.totalCost.toFixed(2)}</span>
                 </div>
                 {ctx.costPerOrder !== undefined && (
-                  <p className="text-xs text-gray-500 mb-3">Cost per order: <span className="font-semibold text-gray-700">${(ctx.costPerOrder || 0).toFixed(2)}</span></p>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Cost per order: <span className="font-semibold text-gray-700">${(ctx.costPerOrder||0).toFixed(2)}</span>
+                  </p>
                 )}
                 {ctx.costPerBatch !== undefined && (
-                  <p className="text-xs text-gray-500 mb-3">Cost per batch: <span className="font-semibold text-gray-700">${(ctx.costPerBatch || 0).toFixed(2)}</span></p>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Cost per batch: <span className="font-semibold text-gray-700">${(ctx.costPerBatch||0).toFixed(2)}</span>
+                  </p>
                 )}
                 <div className="space-y-1 mt-2 border-t border-gray-50 pt-2">
-                  {ctx.ingredients.filter((i: any) => i.totalCost > 0).slice(0, 6).map((ing: any) => (
+                  {ctx.ingredients.filter((i:any) => i.totalCost > 0).slice(0,6).map((ing: any) => (
                     <div key={ing.code} className="flex justify-between text-xs">
                       <span className="text-gray-600">{ing.name}</span>
                       <span className="text-gray-700 font-medium">${ing.totalCost.toFixed(2)}</span>
                     </div>
                   ))}
-                  {ctx.ingredients.filter((i: any) => i.totalCost > 0).length > 6 && (
-                    <p className="text-xs text-gray-400 text-right">+{ctx.ingredients.filter((i: any) => i.totalCost > 0).length - 6} more</p>
+                  {ctx.ingredients.filter((i:any) => i.totalCost > 0).length > 6 && (
+                    <p className="text-xs text-gray-400 text-right">
+                      +{ctx.ingredients.filter((i:any) => i.totalCost > 0).length - 6} more
+                    </p>
                   )}
                 </div>
               </Card>
