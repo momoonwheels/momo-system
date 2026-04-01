@@ -202,9 +202,20 @@ export default function ReceiptsPage() {
                 {/* Header */}
                 <div className="flex items-start justify-between mb-4">
                   <div>
-                    <h3 className="font-semibold text-gray-900 text-base">
-                      {r.vendor_name || <span className="text-amber-500 italic">No vendor — manual entry needed</span>}
-                    </h3>
+                    <input
+                      type="text"
+                      defaultValue={r.vendor_name || ''}
+                      placeholder="Vendor name"
+                      onBlur={async e => {
+                        if (e.target.value !== r.vendor_name) {
+                          const sb = (await import('@/lib/supabase')).supabase
+                          await sb.from('receipts').update({ vendor_name: e.target.value }).eq('id', r.id)
+                          toast.success('Vendor updated')
+                          loadReceipts()
+                        }
+                      }}
+                      className="font-semibold text-gray-900 text-base border-b border-transparent hover:border-gray-300 focus:border-brand-400 focus:outline-none bg-transparent w-full max-w-xs"
+                    />
                     <div className="flex items-center gap-2 mt-1">
                       <input
                         type="date"
