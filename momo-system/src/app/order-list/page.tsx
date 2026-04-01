@@ -148,7 +148,10 @@ export default function OrderListPage() {
         const ing = ingMeta[line.code] || {}
         const conv = Number(line.convFactor) || 1
         const recipeQty = Number(line.needed) || 0
-        const vendorQty = conv > 0 ? Math.ceil(line.unitsToBuy || recipeQty / conv) : 0
+        const currentOnHand = (onHand[line.code] || 0) * conv
+        const netNeeded = Math.max(0, recipeQty - currentOnHand)
+        const minQty = Number(ing.min_order_qty) || 1
+        const vendorQty = netNeeded <= 0 ? 0 : Math.max(minQty, Math.ceil((netNeeded / conv) / minQty) * minQty)
         return {
           ingredient_code:        ing.code || line.code,
           ingredient_name:        ing.name || line.code,
