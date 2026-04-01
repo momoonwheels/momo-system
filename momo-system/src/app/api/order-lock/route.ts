@@ -4,10 +4,9 @@ import { createServerClient } from '@/lib/supabase'
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 
-// Given any date, return Monday and Sunday of that calendar week
 function calendarWeekWindow(weekStart: string): { monday: string; sunday: string } {
   const d = new Date(weekStart + 'T12:00:00')
-  const day = d.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+  const day = d.getDay()
   const daysToMonday = day === 0 ? 6 : day - 1
   const monday = new Date(d)
   monday.setDate(d.getDate() - daysToMonday)
@@ -19,7 +18,6 @@ function calendarWeekWindow(weekStart: string): { monday: string; sunday: string
   }
 }
 
-// GET: fetch lock + reconciliation for a week
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
   const { searchParams } = new URL(req.url)
@@ -34,9 +32,6 @@ export async function GET(req: NextRequest) {
 
   if (!lock) return NextResponse.json({ locked: false })
 
-  // Receipts window = Monday–Sunday of the calendar week containing week_start
-  // e.g. week_start Wed Apr 1 → Mon Mar 30 to Sun Apr 5
-  // Buying happens Mon–Tue before the service week, captured in this window
   const { monday, sunday } = calendarWeekWindow(weekStart)
 
   const { data: receiptLines } = await sb
@@ -49,7 +44,7 @@ export async function GET(req: NextRequest) {
       status,
       matched_ingredient_id,
       receipts!inner(receipt_date, vendor_name, status),
-      ingredients!matched_ingredient_id(code, name)
+      ingredients!matched_ingredient_id(code, name, conv_factor, recipe_unit)
     `)
     .eq('status', 'confirmed')
     .gte('receipts.receipt_date', monday)
@@ -58,17 +53,23 @@ export async function GET(req: NextRequest) {
 
   const actualByCode: Record<string, { qty: number; cost: number; lines: any[] }> = {}
   for (const line of receiptLines || []) {
-    const code = (line.ingredients as any)?.code
+    const ing = line.ingredients as any
+    const code = ing?.code
     if (!code) continue
+    const vendorQty  = Number(line.quantity)    || 0
+    const convFactor = Number(ing?.conv_factor) || 1
+    const recipeQty  = vendorQty * convFactor
     if (!actualByCode[code]) actualByCode[code] = { qty: 0, cost: 0, lines: [] }
-    actualByCode[code].qty  += Number(line.quantity)    || 0
+    actualByCode[code].qty  += recipeQty
     actualByCode[code].cost += Number(line.total_price) || 0
     actualByCode[code].lines.push({
-      raw_text: line.raw_text,
-      qty:      line.quantity,
-      unit:     line.unit,
-      vendor:   (line.receipts as any)?.vendor_name,
-      date:     (line.receipts as any)?.receipt_date,
+      raw_text:    line.raw_text,
+      vendor_qty:  vendorQty,
+      recipe_qty:  recipeQty,
+      recipe_unit: ing?.recipe_unit,
+      unit:        line.unit,
+      vendor:      (line.receipts as any)?.vendor_name,
+      date:        (line.receipts as any)?.receipt_date,
     })
   }
 
@@ -87,25 +88,19 @@ export async function GET(req: NextRequest) {
   })
 }
 
-// POST: lock the order
 export async function POST(req: NextRequest) {
   const sb = createServerClient()
   const body = await req.json()
   const { week_start, items } = body
-
   if (!week_start || !items?.length)
     return NextResponse.json({ error: 'week_start and items required' }, { status: 400 })
-
   const { data: lock, error: lockErr } = await sb
     .from('order_lock')
     .upsert({ week_start }, { onConflict: 'week_start' })
     .select()
     .single()
-
   if (lockErr) return NextResponse.json({ error: lockErr.message }, { status: 500 })
-
   await sb.from('order_lock_items').delete().eq('lock_id', lock.id)
-
   const lockItems = items.map((item: any) => ({
     lock_id:                lock.id,
     ingredient_code:        item.ingredient_code,
@@ -117,18 +112,14 @@ export async function POST(req: NextRequest) {
     recommended_recipe_qty: item.recommended_recipe_qty || 0,
     recommended_vendor_qty: item.recommended_vendor_qty || 0,
   }))
-
   const { error: itemsErr } = await sb.from('order_lock_items').insert(lockItems)
   if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 500 })
-
   return NextResponse.json({ ok: true, lock_id: lock.id, items_saved: lockItems.length })
 }
 
-// PATCH: update notes
 export async function PATCH(req: NextRequest) {
   const sb = createServerClient()
   const body = await req.json()
-
   if (body.type === 'overall') {
     const { lock_id, overall_notes } = body
     const { error } = await sb.from('order_lock').update({ overall_notes }).eq('id', lock_id)
@@ -138,6 +129,5 @@ export async function PATCH(req: NextRequest) {
     const { error } = await sb.from('order_lock_items').update({ manager_notes }).eq('id', item_id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   }
-
   return NextResponse.json({ ok: true })
 }
