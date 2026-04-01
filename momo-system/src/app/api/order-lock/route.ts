@@ -4,6 +4,21 @@ import { createServerClient } from '@/lib/supabase'
 export const dynamic = 'force-dynamic'
 export const fetchCache = 'force-no-store'
 
+// Given any date, return Monday and Sunday of that calendar week
+function calendarWeekWindow(weekStart: string): { monday: string; sunday: string } {
+  const d = new Date(weekStart + 'T12:00:00')
+  const day = d.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+  const daysToMonday = day === 0 ? 6 : day - 1
+  const monday = new Date(d)
+  monday.setDate(d.getDate() - daysToMonday)
+  const sunday = new Date(monday)
+  sunday.setDate(monday.getDate() + 6)
+  return {
+    monday: monday.toISOString().split('T')[0],
+    sunday: sunday.toISOString().split('T')[0],
+  }
+}
+
 // GET: fetch lock + reconciliation for a week
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
@@ -11,7 +26,6 @@ export async function GET(req: NextRequest) {
   const weekStart = searchParams.get('week_start')
   if (!weekStart) return NextResponse.json({ error: 'week_start required' }, { status: 400 })
 
-  // Get lock with items
   const { data: lock } = await sb
     .from('order_lock')
     .select('*, order_lock_items(*)')
@@ -20,16 +34,11 @@ export async function GET(req: NextRequest) {
 
   if (!lock) return NextResponse.json({ locked: false })
 
-  // FIX 1: Look 14 days BEFORE week start through 7 days AFTER
-  // Receipts arrive before the week starts (you buy ingredients in advance)
-  const windowStart = new Date(weekStart + 'T12:00:00')
-  windowStart.setDate(windowStart.getDate() - 14)
-  const windowEnd = new Date(weekStart + 'T12:00:00')
-  windowEnd.setDate(windowEnd.getDate() + 7)
-  const windowStartStr = windowStart.toISOString().split('T')[0]
-  const windowEndStr   = windowEnd.toISOString().split('T')[0]
+  // Receipts window = Monday–Sunday of the calendar week containing week_start
+  // e.g. week_start Wed Apr 1 → Mon Mar 30 to Sun Apr 5
+  // Buying happens Mon–Tue before the service week, captured in this window
+  const { monday, sunday } = calendarWeekWindow(weekStart)
 
-  // FIX 2: use matched_ingredient_id (not ingredient_id)
   const { data: receiptLines } = await sb
     .from('receipt_line_items')
     .select(`
@@ -43,11 +52,10 @@ export async function GET(req: NextRequest) {
       ingredients!matched_ingredient_id(code, name)
     `)
     .eq('status', 'confirmed')
-    .gte('receipts.receipt_date', windowStartStr)
-    .lte('receipts.receipt_date', windowEndStr)
+    .gte('receipts.receipt_date', monday)
+    .lte('receipts.receipt_date', sunday)
     .not('matched_ingredient_id', 'is', null)
 
-  // Sum actual qty by ingredient code
   const actualByCode: Record<string, { qty: number; cost: number; lines: any[] }> = {}
   for (const line of receiptLines || []) {
     const code = (line.ingredients as any)?.code
@@ -73,12 +81,13 @@ export async function GET(req: NextRequest) {
       locked_by:     lock.locked_by,
       overall_notes: lock.overall_notes,
     },
-    items:  lock.order_lock_items,
-    actual: actualByCode,
+    items:          lock.order_lock_items,
+    actual:         actualByCode,
+    receipt_window: { monday, sunday },
   })
 }
 
-// POST: lock the order (save snapshot)
+// POST: lock the order
 export async function POST(req: NextRequest) {
   const sb = createServerClient()
   const body = await req.json()
@@ -115,7 +124,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, lock_id: lock.id, items_saved: lockItems.length })
 }
 
-// PATCH: update manager notes
+// PATCH: update notes
 export async function PATCH(req: NextRequest) {
   const sb = createServerClient()
   const body = await req.json()
