@@ -10,6 +10,10 @@ const ST_PACKAGES = [
   'ST-NAP','ST-5-JLID','ST-6-GLOVE','ST-7-FILM',
 ]
 
+// Packages that are fixed-stock / reorder-rule-driven rather than order-volume-driven.
+// Removing them from the food calc so the reorder rules block handles them instead.
+const REORDER_RULE_OVERRIDE = ['CH-4'] // MSG Shaker: 1 per location, restock at ≤0.5
+
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
   const { searchParams } = new URL(req.url)
@@ -38,7 +42,12 @@ export async function GET(req: NextRequest) {
 
   const needed = calcPackageNeeds(orders, cfg)
 
-  // ── Truck inventory (log-based) ───────────────────────────────────────────
+  // Remove packages that should be reorder-rule-driven, not order-volume-driven
+  for (const code of REORDER_RULE_OVERRIDE) {
+    delete needed[code]
+  }
+
+  // ── Truck inventory (log-based view) ─────────────────────────────────────
   const { data: truckData } = await sb
     .from('truck_inventory_current')
     .select('*')
@@ -66,25 +75,32 @@ export async function GET(req: NextRequest) {
     needed[code] = toSend[code]
   }
 
-  // ── Reorder-rule-driven packages (CL, RA, SA, and any future additions) ──
-  // These are threshold-based, not order-volume-based. Send restock_qty when
-  // on-truck ≤ restock_threshold. Always slot-0 only (handled in page.tsx).
+  // ── Reorder-rule-driven packages (CL, RA, SA, CH-4, and any future) ──────
+  // These are threshold-based. Send restock_qty when on-truck ≤ restock_threshold.
+  // Always pinned to slot 0 in multi-slot mode (handled in page.tsx).
+  //
+  // Two-step lookup avoids Supabase nested-select FK naming issues.
   const calcHandled = new Set([...Object.keys(needed), ...ST_PACKAGES])
 
+  // Step 1: get all package codes mapped by ID
+  const { data: allPkgs } = await sb.from('packages').select('id, code')
+  const pkgCodeMap: Record<string, string> = {}
+  for (const p of allPkgs ?? []) pkgCodeMap[p.id] = p.code
+
+  // Step 2: get reorder rules for this location
   const { data: reorderRules } = await sb
     .from('package_reorder_rules')
-    .select('package_id, initial_send_qty, restock_threshold, restock_qty, packages(code)')
+    .select('package_id, restock_threshold, restock_qty')
     .eq('location_id', locationId)
     .eq('active', true)
 
-  // Track which codes are reorder-rule-driven so page.tsx can handle multi-slot
   const reorderRuleCodes: string[] = []
 
   for (const rule of reorderRules ?? []) {
-    const code = (rule.packages as any)?.code
+    const code = pkgCodeMap[rule.package_id]
     if (!code || calcHandled.has(code)) continue
     const onHand    = totalOnTruck[code] ?? 0
-    const threshold = Number(rule.restock_threshold) ?? 0
+    const threshold = Number(rule.restock_threshold)
     const sendQty   = onHand <= threshold ? Number(rule.restock_qty) : 0
     toSend[code] = sendQty
     needed[code] = sendQty
@@ -97,7 +113,7 @@ export async function GET(req: NextRequest) {
   const response = NextResponse.json({
     needed, onTruck, onTruckDelivery, totalOnTruck,
     toSend, packages, orders, weekOrders, cfg,
-    reorderRuleCodes, // page.tsx uses this to pin these to slot 0 in multi-slot mode
+    reorderRuleCodes,
   })
   response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
   return response
