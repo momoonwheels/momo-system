@@ -10,9 +10,14 @@ const ST_PACKAGES = [
   'ST-NAP','ST-5-JLID','ST-6-GLOVE','ST-7-FILM',
 ]
 
-// Packages that are fixed-stock / reorder-rule-driven rather than order-volume-driven.
-// Removing them from the food calc so the reorder rules block handles them instead.
-const REORDER_RULE_OVERRIDE = ['CH-4'] // MSG Shaker: 1 per location, restock at ≤0.5
+// Packages whose send qty is driven by reorder rules (threshold-based),
+// NOT by order volume. Remove them from calcPackageNeeds output so they
+// don't block the reorder-rules loop via calcHandled.
+const REORDER_RULE_OVERRIDE = [
+  'CH-4',                                                  // MSG Shaker
+  'NA_SA-3-RA','NA_SA-2-RA','NA_SA-1-RA','NA-4','NA-5',  // Regular Achar
+  'NA_SA-3-SA','NA_SA-2-SA','NA_SA-1-SA','SA-4',          // Spicy Achar
+]
 
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
@@ -42,7 +47,7 @@ export async function GET(req: NextRequest) {
 
   const needed = calcPackageNeeds(orders, cfg)
 
-  // Remove packages that should be reorder-rule-driven, not order-volume-driven
+  // Remove reorder-rule-driven packages from food calc output
   for (const code of REORDER_RULE_OVERRIDE) {
     delete needed[code]
   }
@@ -76,18 +81,13 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Reorder-rule-driven packages (CL, RA, SA, CH-4, and any future) ──────
-  // These are threshold-based. Send restock_qty when on-truck ≤ restock_threshold.
-  // Always pinned to slot 0 in multi-slot mode (handled in page.tsx).
-  //
   // Two-step lookup avoids Supabase nested-select FK naming issues.
   const calcHandled = new Set([...Object.keys(needed), ...ST_PACKAGES])
 
-  // Step 1: get all package codes mapped by ID
   const { data: allPkgs } = await sb.from('packages').select('id, code')
   const pkgCodeMap: Record<string, string> = {}
   for (const p of allPkgs ?? []) pkgCodeMap[p.id] = p.code
 
-  // Step 2: get reorder rules for this location
   const { data: reorderRules } = await sb
     .from('package_reorder_rules')
     .select('package_id, restock_threshold, restock_qty')
