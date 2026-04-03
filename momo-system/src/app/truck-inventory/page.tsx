@@ -32,33 +32,40 @@ export default function TruckInventoryPage() {
   const loadCurrent = useCallback(async () => {
     if (!locationId) return
     setLoading(true)
-    let data: any[]
-    if (isToday) {
-      const res = await fetch('/api/truck-inventory-log?view=current&location_id=' + locationId)
-      data = await res.json()
-    } else {
-      const [logsRes, metaRes] = await Promise.all([
-        fetch('/api/truck-inventory-log?location_id=' + locationId + '&log_date=' + selectedDate).then(r => r.json()),
-        fetch('/api/truck-inventory-log?view=current&location_id=' + locationId).then(r => r.json())
-      ])
-      const logMap: Record<string, any> = {}
-      for (const log of (Array.isArray(logsRes) ? logsRes : [])) {
-        const pkgId = log.package_id
-        if (!logMap[pkgId]) logMap[pkgId] = { deliveries: 0, count: null, verified: null }
-        if (log.log_type === 'delivery') logMap[pkgId].deliveries += Number(log.quantity)
-        if (log.log_type === 'count') logMap[pkgId].count = Number(log.quantity)
-        if (log.log_type === 'verified') logMap[pkgId].verified = Number(log.quantity)
-      }
-      data = (Array.isArray(metaRes) ? metaRes : []).map((row: any) => ({
-        ...row,
-        todays_delivery: logMap[row.package_id]?.deliveries || 0,
-        today_count_qty: logMap[row.package_id]?.verified ?? logMap[row.package_id]?.count ?? null,
-        current_on_hand: logMap[row.package_id]?.verified ?? logMap[row.package_id]?.count ?? row.last_count_qty ?? 0,
-      }))
+
+    const dateToLoad = isToday ? TODAY : selectedDate
+
+    const [currentRes, logsRes] = await Promise.all([
+      fetch('/api/truck-inventory-log?view=current&location_id=' + locationId).then(r => r.json()),
+      fetch('/api/truck-inventory-log?location_id=' + locationId + '&log_date=' + dateToLoad).then(r => r.json())
+    ])
+
+    const logMap: Record<string, any> = {}
+    for (const log of (Array.isArray(logsRes) ? logsRes : [])) {
+      const pkgId = log.package_id
+      if (!logMap[pkgId]) logMap[pkgId] = { deliveries: 0, count: null, verified: null }
+      if (log.log_type === 'delivery') logMap[pkgId].deliveries += Number(log.quantity)
+      if (log.log_type === 'count') logMap[pkgId].count = Number(log.quantity)
+      if (log.log_type === 'verified') logMap[pkgId].verified = Number(log.quantity)
     }
-    setCurrent(Array.isArray(data) ? data : [])
-    const c: Record<string,number> = {}
-    for (const row of (Array.isArray(data) ? data : [])) {
+
+    const data = (Array.isArray(currentRes) ? currentRes : []).map((row: any) => {
+      const todayDelivery = logMap[row.package_id]?.deliveries || 0
+      const lastCount = row.last_count_qty ?? 0
+      return {
+        ...row,
+        todays_delivery: todayDelivery,
+        today_count_qty: logMap[row.package_id]?.verified ?? logMap[row.package_id]?.count ?? null,
+        current_on_hand:
+          logMap[row.package_id]?.verified ??
+          logMap[row.package_id]?.count ??
+          lastCount + todayDelivery,
+      }
+    })
+
+    setCurrent(data)
+    const c: Record<string, number> = {}
+    for (const row of data) {
       c[row.package_id] = Number(row.current_on_hand) || 0
     }
     setCounts(c)
@@ -236,9 +243,9 @@ export default function TruckInventoryPage() {
                         return (
                           <tr key={row.package_id} className={i%2===0?'bg-white':'bg-gray-50'}>
                             <td className="px-4 py-2.5">
-                      <div className="text-sm font-mono font-bold text-brand-700">{row.code}</div>
-                      <div className="text-xs text-gray-500">{row.contents}</div>
-                    </td>
+                              <div className="text-sm font-mono font-bold text-brand-700">{row.code}</div>
+                              <div className="text-xs text-gray-500">{row.contents}</div>
+                            </td>
                             <td className="px-4 py-2.5 text-center">
                               <div className="text-sm text-gray-600">{Number(row.last_count_qty)||0}</div>
                               {row.count_date && <div className="text-xs text-gray-400">{row.count_date}</div>}
