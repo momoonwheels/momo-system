@@ -136,7 +136,7 @@ export default function PackagingPage() {
   const calcSlotNeeds = (days: string[], slotIdx: number) => {
     if (!data) return {}
 
-    // Single slot — use API values directly (already has ST threshold applied)
+    // Single slot — use API values directly (already has all rules applied)
     if (!days.length || schedule.length <= 1) {
       return slotIdx === 0 ? (data.toSend ?? {}) : (data.needed ?? {})
     }
@@ -189,10 +189,21 @@ export default function PackagingPage() {
     // Subtract on-truck for first slot only
     if (slotIdx === 0) {
       for (const k in needed) {
-        // ST already accounts for truck; skip double-subtract
         if (!ST_PACKAGES.includes(k)) {
           needed[k] = Math.max(0, needed[k] - (totalOnTruck[k] ?? 0))
         }
+      }
+    }
+
+    // ── Reorder-rule packages (CL, RA, SA, etc.) ──────────────────────────
+    // These are threshold-based, not order-volume-based.
+    // Pin to slot 0 only — they don't split by day.
+    if (slotIdx === 0) {
+      const reorderRuleCodes: string[] = data.reorderRuleCodes ?? []
+      for (const code of reorderRuleCodes) {
+        // Use the pre-computed value from the API (already threshold-checked)
+        const apiSend = data.toSend?.[code] ?? 0
+        if (apiSend > 0) needed[code] = apiSend
       }
     }
 
@@ -212,7 +223,7 @@ export default function PackagingPage() {
     return acc
   }, {})
 
-  const containerOrder = ['FM','CM','JM','CH','SO','RA','SA','ST','WAT','Other']
+  const containerOrder = ['FM','CM','JM','CH','SO','RA','SA','ST','CL','WAT','Other']
   const sortedGroups = containerOrder
     .filter(c => grouped[c]?.length > 0)
     .map(c => [c, grouped[c]] as [string, any[]])
