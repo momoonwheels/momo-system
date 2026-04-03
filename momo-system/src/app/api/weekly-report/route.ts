@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
     const { data: orders } = await sb.from('planned_orders')
       .select('*, menu_items(code)')
       .eq('location_id', loc.id)
-      .eq('week_start', weekStart)
+      .gte / .lte
 
     plannedByLocation[loc.id] = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
     const days = ['mon','tue','wed','thu','fri','sat','sun']
