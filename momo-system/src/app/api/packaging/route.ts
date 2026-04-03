@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
 
   const needed = calcPackageNeeds(orders, cfg)
 
-  // ── Use truck_inventory_current (log-based) instead of truck_inventory ─────
+  // ── Truck inventory (log-based) ───────────────────────────────────────────
   const { data: truckData } = await sb
     .from('truck_inventory_current')
     .select('*')
@@ -66,9 +66,9 @@ export async function GET(req: NextRequest) {
     needed[code] = toSend[code]
   }
 
-  // ── Reorder-rule-driven packages (RA, SA, and any future additions) ────────
-  // Packages not handled by calcPackageNeeds or ST logic get their send qty
-  // from package_reorder_rules: send restock_qty when on-truck ≤ restock_threshold
+  // ── Reorder-rule-driven packages (CL, RA, SA, and any future additions) ──
+  // These are threshold-based, not order-volume-based. Send restock_qty when
+  // on-truck ≤ restock_threshold. Always slot-0 only (handled in page.tsx).
   const calcHandled = new Set([...Object.keys(needed), ...ST_PACKAGES])
 
   const { data: reorderRules } = await sb
@@ -77,16 +77,18 @@ export async function GET(req: NextRequest) {
     .eq('location_id', locationId)
     .eq('active', true)
 
+  // Track which codes are reorder-rule-driven so page.tsx can handle multi-slot
+  const reorderRuleCodes: string[] = []
+
   for (const rule of reorderRules ?? []) {
     const code = (rule.packages as any)?.code
     if (!code || calcHandled.has(code)) continue
-    const onHand      = totalOnTruck[code] ?? 0
-    const threshold   = Number(rule.restock_threshold) ?? 0
-    const sendQty     = onHand <= threshold
-      ? Number(rule.restock_qty)
-      : 0
+    const onHand    = totalOnTruck[code] ?? 0
+    const threshold = Number(rule.restock_threshold) ?? 0
+    const sendQty   = onHand <= threshold ? Number(rule.restock_qty) : 0
     toSend[code] = sendQty
     needed[code] = sendQty
+    reorderRuleCodes.push(code)
   }
 
   const { data: packages } = await sb.from('packages')
@@ -95,6 +97,7 @@ export async function GET(req: NextRequest) {
   const response = NextResponse.json({
     needed, onTruck, onTruckDelivery, totalOnTruck,
     toSend, packages, orders, weekOrders, cfg,
+    reorderRuleCodes, // page.tsx uses this to pin these to slot 0 in multi-slot mode
   })
   response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
   return response
