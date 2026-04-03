@@ -47,10 +47,11 @@ export async function GET(req: NextRequest) {
 
   for (const loc of targetLocations) {
     const { data: orders } = await sb.from('planned_orders')
-      .select('*, menu_items(code)')
-      .eq('location_id', loc.id)
-      .gte / .lte
-
+  .select('*, menu_items(code)')
+  .eq('location_id', loc.id)
+  .gte('week_start', weekStart)
+  .lte('week_start', weekEndStr)
+    
     plannedByLocation[loc.id] = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
     const days = ['mon','tue','wed','thu','fri','sat','sun']
     for (const row of orders||[]) {
