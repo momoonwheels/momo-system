@@ -142,9 +142,9 @@ export default function PackagingPage() {
     }
 
     // Multi-slot: calculate per-day orders for food items
-    const weekOrders  = data.weekOrders ?? {}
-    const cfg         = data.cfg ?? {}
-    const buf         = 1 + (cfg.BUF_PCT ?? 0.05)
+    const weekOrders   = data.weekOrders ?? {}
+    const cfg          = data.cfg ?? {}
+    const buf          = 1 + (cfg.BUF_PCT ?? 0.05)
     const totalOnTruck = data.totalOnTruck ?? {}
     const needed: Record<string, number> = {}
 
@@ -153,10 +153,10 @@ export default function PackagingPage() {
       slotOrders[menuCode] = days.reduce((sum, day) => sum + (weekOrders[menuCode]?.[day] || 0), 0)
     }
     const { REG, FRI, CHI, JHO, CW } = slotOrders
-
     const batchJH = Math.ceil(JHO / (cfg.BATCH_JH ?? 10))
 
-    // Food packages — calculated per slot orders
+    // Food packages — order-volume-driven, split by slot days
+    // CH-4 (MSG Shaker) intentionally excluded — now reorder-rule-driven
     needed['FM-1']  = Math.ceil((REG+FRI+CHI+JHO)*(cfg.SERV_MM_PCS??10)/(cfg.SZ_FM1??100))
     needed['CM-1']  = Math.ceil(CHI*buf*8/(cfg.SZ_CM1??84.5))
     needed['CM-2']  = Math.ceil(CHI*4/(cfg.SZ_CM2??80))
@@ -167,7 +167,6 @@ export default function PackagingPage() {
     needed['CH-1']  = Math.ceil(CW*2.5/(cfg.SZ_CH1??80))
     needed['CH-2']  = Math.max(0, 2 - (totalOnTruck['CH-2'] ?? 0))
     needed['CH-3']  = Math.ceil(CW*buf/(cfg.SZ_CH3??33.8))
-    needed['CH-4']  = Math.ceil(CW*0.17/(cfg.SZ_CH4??0.5))
     needed['CH-5']  = Math.ceil(CW/(cfg.SZ_CH5??10))
     needed['CH-6']  = Math.ceil(CW*1/(cfg.SZ_CH6??80))
     needed['CH-7']  = Math.ceil(CW*6/(cfg.SZ_CH7??64))
@@ -195,13 +194,11 @@ export default function PackagingPage() {
       }
     }
 
-    // ── Reorder-rule packages (CL, RA, SA, etc.) ──────────────────────────
-    // These are threshold-based, not order-volume-based.
-    // Pin to slot 0 only — they don't split by day.
+    // ── Reorder-rule packages (CL, RA, SA, CH-4, etc.) ────────────────────
+    // Threshold-based only — pin entirely to slot 0, never split by day.
     if (slotIdx === 0) {
       const reorderRuleCodes: string[] = data.reorderRuleCodes ?? []
       for (const code of reorderRuleCodes) {
-        // Use the pre-computed value from the API (already threshold-checked)
         const apiSend = data.toSend?.[code] ?? 0
         if (apiSend > 0) needed[code] = apiSend
       }
