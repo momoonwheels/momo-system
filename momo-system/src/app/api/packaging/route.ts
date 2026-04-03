@@ -28,7 +28,6 @@ export async function GET(req: NextRequest) {
   const orders = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
   const weekOrders: Record<string, Record<string, number>> = {}
   const days = ['mon','tue','wed','thu','fri','sat','sun']
-
   for (const row of ordersData||[]) {
     const code = (row.menu_items as any)?.code
     if (!code) continue
@@ -48,14 +47,12 @@ export async function GET(req: NextRequest) {
   const onTruck: Record<string,number>         = {}
   const onTruckDelivery: Record<string,number> = {}
   const totalOnTruck: Record<string,number>    = {}
-
   for (const row of truckData||[]) {
     const code = row.code
     if (code) {
-      // truck_inventory_current has current_on_hand as the live value
       const onHand = Number(row.current_on_hand) || 0
       onTruck[code]         = onHand
-      onTruckDelivery[code] = 0  // log system doesn't split this way
+      onTruckDelivery[code] = 0
       totalOnTruck[code]    = onHand
     }
   }
@@ -67,6 +64,29 @@ export async function GET(req: NextRequest) {
     const onHand = totalOnTruck[code] ?? 0
     toSend[code] = onHand <= 0.5 ? 1 : 0
     needed[code] = toSend[code]
+  }
+
+  // ── Reorder-rule-driven packages (RA, SA, and any future additions) ────────
+  // Packages not handled by calcPackageNeeds or ST logic get their send qty
+  // from package_reorder_rules: send restock_qty when on-truck ≤ restock_threshold
+  const calcHandled = new Set([...Object.keys(needed), ...ST_PACKAGES])
+
+  const { data: reorderRules } = await sb
+    .from('package_reorder_rules')
+    .select('package_id, initial_send_qty, restock_threshold, restock_qty, packages(code)')
+    .eq('location_id', locationId)
+    .eq('active', true)
+
+  for (const rule of reorderRules ?? []) {
+    const code = (rule.packages as any)?.code
+    if (!code || calcHandled.has(code)) continue
+    const onHand      = totalOnTruck[code] ?? 0
+    const threshold   = Number(rule.restock_threshold) ?? 0
+    const sendQty     = onHand <= threshold
+      ? Number(rule.restock_qty)
+      : 0
+    toSend[code] = sendQty
+    needed[code] = sendQty
   }
 
   const { data: packages } = await sb.from('packages')
