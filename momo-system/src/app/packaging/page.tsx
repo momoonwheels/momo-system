@@ -188,39 +188,46 @@ export default function PackagingPage() {
     // Subtract on-truck for first slot only
     // Subtract on-truck — slot 0 gets full subtraction, slot 1 gets leftover
     // after slot 0 consumes its share
-    const slot0RawNeeded: Record<string, number> = {}
-    if (slotIdx > 0) {
-      const s0Days = schedule[0]?.days ?? []
-      const s0: Record<string, number> = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
-      for (const menuCode of Object.keys(s0)) {
-        s0[menuCode] = s0Days.reduce((sum, day) => sum + (weekOrders[menuCode]?.[day] || 0), 0)
-      }
-      const { REG: R0, FRI: F0, CHI: C0, JHO: J0, CW: W0 } = s0
-      const bJH0 = Math.ceil(J0 / (cfg.BATCH_JH ?? 10))
-      slot0RawNeeded['FM-1'] = Math.ceil((R0+F0+C0+J0)*(cfg.SERV_MM_PCS??10)/(cfg.SZ_FM1??100))
-      slot0RawNeeded['CM-1'] = Math.ceil(C0*buf*8/(cfg.SZ_CM1??84.5))
-      slot0RawNeeded['CM-2'] = Math.ceil(C0*4/(cfg.SZ_CM2??80))
-      slot0RawNeeded['JM-1'] = bJH0
-      slot0RawNeeded['JM-3'] = Math.ceil(J0*(cfg.SERV_JM3_10??4)/10/(cfg.SZ_JM3??16))
-      slot0RawNeeded['JM-4'] = Math.ceil(J0*(cfg.SERV_JM4_15??0.5)/15/(cfg.SZ_JM4??2))
-      slot0RawNeeded['JM-5'] = Math.ceil(J0*0.25*0.17/(cfg.SZ_JM5??0.5))
-      slot0RawNeeded['CH-1'] = Math.ceil(W0*2.5/(cfg.SZ_CH1??80))
-      slot0RawNeeded['CH-3'] = Math.ceil(W0*buf/(cfg.SZ_CH3??33.8))
-      slot0RawNeeded['CH-5'] = Math.ceil(W0/(cfg.SZ_CH5??10))
-      slot0RawNeeded['CH-6'] = Math.ceil(W0/(cfg.SZ_CH6??80))
-      slot0RawNeeded['CH-7'] = Math.ceil(W0*6/(cfg.SZ_CH7??64))
-      slot0RawNeeded['CH-8'] = Math.ceil(W0/(cfg.SZ_CH6??80))
-      slot0RawNeeded['WATER'] = Math.ceil((R0+F0+C0+J0+W0)/(cfg.SZ_WAT??32))
-    }
+    // Determine if slot 0 delivery has already gone out this week
+    const dayToNum: Record<string,number> = { sun:0, mon:1, tue:2, wed:3, thu:4, fri:5, sat:6 }
+    const slot0FirstDay = schedule[0]?.days?.[0] ?? 'wed'
+    const slot0AlreadyDelivered = new Date().getDay() >= (dayToNum[slot0FirstDay] ?? 3)
 
     for (const k in needed) {
       if (!ST_PACKAGES.includes(k)) {
         const onHand = totalOnTruck[k] ?? 0
         if (slotIdx === 0) {
+          // Always subtract full on-hand from slot 0
+          needed[k] = Math.max(0, needed[k] - onHand)
+        } else if (slot0AlreadyDelivered) {
+          // Slot 0 already went out — current on-hand is what remains for slot 1
           needed[k] = Math.max(0, needed[k] - onHand)
         } else {
-          // leftover = on-hand that slot 0 didn't consume → carries into slot 1
-          const leftover = Math.max(0, onHand - (slot0RawNeeded[k] ?? 0))
+          // Still planning (e.g. Sunday night) — subtract only what slot 0 won't consume
+          const s0Days = schedule[0]?.days ?? []
+          const s0: Record<string,number> = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
+          for (const menuCode of Object.keys(s0)) {
+            s0[menuCode] = s0Days.reduce((sum, day) => sum + (weekOrders[menuCode]?.[day] || 0), 0)
+          }
+          const { REG:R0, FRI:F0, CHI:C0, JHO:J0, CW:W0 } = s0
+          const bJH0 = Math.ceil(J0 / (cfg.BATCH_JH ?? 10))
+          const slot0Raw: Record<string,number> = {
+            'FM-1':  Math.ceil((R0+F0+C0+J0)*(cfg.SERV_MM_PCS??10)/(cfg.SZ_FM1??100)),
+            'CM-1':  Math.ceil(C0*buf*8/(cfg.SZ_CM1??84.5)),
+            'CM-2':  Math.ceil(C0*4/(cfg.SZ_CM2??80)),
+            'JM-1':  bJH0,
+            'JM-3':  Math.ceil(J0*(cfg.SERV_JM3_10??4)/10/(cfg.SZ_JM3??16)),
+            'JM-4':  Math.ceil(J0*(cfg.SERV_JM4_15??0.5)/15/(cfg.SZ_JM4??2)),
+            'JM-5':  Math.ceil(J0*0.25*0.17/(cfg.SZ_JM5??0.5)),
+            'CH-1':  Math.ceil(W0*2.5/(cfg.SZ_CH1??80)),
+            'CH-3':  Math.ceil(W0*buf/(cfg.SZ_CH3??33.8)),
+            'CH-5':  Math.ceil(W0/(cfg.SZ_CH5??10)),
+            'CH-6':  Math.ceil(W0/(cfg.SZ_CH6??80)),
+            'CH-7':  Math.ceil(W0*6/(cfg.SZ_CH7??64)),
+            'CH-8':  Math.ceil(W0/(cfg.SZ_CH6??80)),
+            'WATER': Math.ceil((R0+F0+C0+J0+W0)/(cfg.SZ_WAT??32)),
+          }
+          const leftover = Math.max(0, onHand - (slot0Raw[k] ?? 0))
           needed[k] = Math.max(0, needed[k] - leftover)
         }
       }
@@ -316,11 +323,9 @@ export default function PackagingPage() {
                           : 'All days combined'}
                       </p>
                     </div>
-                    {slotIdx === 0 && (
-                      <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
-                        Subtracts on-truck
-                      </span>
-                    )}
+                    <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
+                      Subtracts on-truck
+                    </span>
                   </div>
 
                   {!hasAny ? (
