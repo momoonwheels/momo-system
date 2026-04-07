@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 
 type Announcement = {
   id: number
@@ -10,8 +10,6 @@ type Announcement = {
 }
 
 export default function WebsitePage() {
-  const supabase = createClient()
-
   const [message, setMessage]   = useState('')
   const [isActive, setIsActive] = useState(false)
   const [record, setRecord]     = useState<Announcement | null>(null)
@@ -36,7 +34,6 @@ export default function WebsitePage() {
       setLoading(false)
     }
     load()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function save() {
