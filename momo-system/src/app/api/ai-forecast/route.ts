@@ -220,6 +220,10 @@ ${weatherSummary}
 ━━━ SECTION 4: LAST YEAR SAME WEEK ━━━
 ${squareSummary}
 
+━━━ SECTION 5: YOUR PAST FORECAST ACCURACY ━━━
+Use this to detect and correct your own systematic bias.
+${accuracyText}
+
 ━━━ BUSINESS CONTEXT ━━━
 - Rain and cold weather significantly reduces walk-up food truck sales
 - Lincoln City: coastal tourist town, weekends 2-3x weekdays, summer peak June-Sept
@@ -278,6 +282,21 @@ Respond ONLY with valid JSON (no markdown, no text outside the JSON):
       note     = parsed.note
     } catch {
       return NextResponse.json({ error: 'Could not parse AI response', raw: rawText }, { status: 500 })
+    }
+
+    // ── 8. Save AI forecast to accuracy tracker ─────────────────────────────
+    try {
+      const aiTotalPlates = Object.values(forecast as Record<string, Record<string, number>>)
+        .reduce((s, days) => s + Object.values(days).reduce((ds, v) => ds + (v || 0), 0), 0)
+      await sb.from('forecast_accuracy').upsert({
+        location_id,
+        week_start,
+        ai_forecast:     forecast,
+        ai_total_plates: aiTotalPlates,
+        updated_at:      new Date().toISOString(),
+      }, { onConflict: 'location_id,week_start' })
+    } catch (e) {
+      console.warn('Could not save AI forecast accuracy:', e)
     }
 
     // ── 7. Save note to DB (non-fatal — run migration_ai_forecast.sql if missing) ──
