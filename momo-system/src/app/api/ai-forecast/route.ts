@@ -208,11 +208,15 @@ Respond ONLY with valid JSON (no markdown, no text outside the JSON):
       return NextResponse.json({ error: 'Could not parse AI response', raw: rawText }, { status: 500 })
     }
 
-    // ── 7. Save note to DB ────────────────────────────────────────────────────
-    await sb.from('planned_order_notes').upsert(
-      { location_id, week_start, notes: note, generated_at: new Date().toISOString() },
-      { onConflict: 'location_id,week_start' }
-    )
+    // ── 7. Save note to DB (non-fatal — run migration_ai_forecast.sql if missing) ──
+    try {
+      await sb.from('planned_order_notes').upsert(
+        { location_id, week_start, notes: note, generated_at: new Date().toISOString() },
+        { onConflict: 'location_id,week_start' }
+      )
+    } catch (e) {
+      console.warn('Could not save AI note (table may not exist yet):', e)
+    }
 
     return NextResponse.json({ forecast, note })
 
