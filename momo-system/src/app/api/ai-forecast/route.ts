@@ -75,31 +75,46 @@ export async function POST(req: NextRequest) {
     const mostRecentWeek = historyWeeks[0] ?? ''
     const mostRecentIsPartial = mostRecentWeek && addDays(mostRecentWeek, 13) >= today
 
-    // ── 3. Fetch actual Square sales for each history week ────────────────────
-    type WeekSales = { weekStart: string; netSales: number; orderCount: number; isPartial: boolean }
+    // ── 3. Fetch actual Square sales for each history week (direct API) ────────
+    type WeekSales = { weekStart: string; grossSales: number; orderCount: number; isPartial: boolean }
     const squareSalesHistory: WeekSales[] = []
+    const sqToken = process.env.SQUARE_ACCESS_TOKEN
 
-    if (squareLocId) {
+    if (squareLocId && sqToken) {
       for (let i = 0; i < historyWeeks.length; i++) {
         const ws  = historyWeeks[i]
         const we  = addDays(ws, 6)
         const isP = i === 0 && !!mostRecentIsPartial
         try {
-          // Call our own /api/square endpoint internally via absolute URL
-          const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://momo-system-m1nv.vercel.app'
-          const res = await fetch(
-            `${baseUrl}/api/square?action=sales&square_location_id=${squareLocId}&start_date=${ws}&end_date=${we}`,
-            { headers: { 'x-internal': '1' } }
-          )
-          if (res.ok) {
-            const d = await res.json()
-            squareSalesHistory.push({
-              weekStart:  ws,
-              netSales:   d.netSales   ?? 0,
-              orderCount: d.orderCount ?? 0,
-              isPartial:  isP,
+          // Fetch all payments for this week directly from Square
+          // begin_time uses UTC — Pacific time is UTC-7 (PDT), so 7am UTC = midnight PDT
+          const beginTime = `${ws}T07:00:00Z`
+          const endTime   = `${we}T06:59:59Z`
+          let cursor = ''
+          let gross = 0
+          let count = 0
+
+          do {
+            const url = `https://connect.squareup.com/v2/payments?location_id=${squareLocId}&begin_time=${beginTime}&end_time=${endTime}&limit=200&sort_order=ASC${cursor ? `&cursor=${cursor}` : ''}`
+            const res = await fetch(url, {
+              headers: { Authorization: `Bearer ${sqToken}`, 'Square-Version': '2024-01-18' }
             })
-          }
+            const data = await res.json()
+            for (const p of data.payments ?? []) {
+              if (p.status === 'COMPLETED') {
+                gross += (p.total_money?.amount ?? 0)
+                count++
+              }
+            }
+            cursor = data.cursor ?? ''
+          } while (cursor)
+
+          squareSalesHistory.push({
+            weekStart:  ws,
+            grossSales: gross / 100,
+            orderCount: count,
+            isPartial:  isP,
+          })
         } catch (e) {
           console.error('Square weekly fetch failed for', ws, e)
         }
@@ -131,14 +146,18 @@ export async function POST(req: NextRequest) {
     // ── 4. Square last year same week (best effort) ──────────────────────────
     let squareSummary = 'Last year same week: no Square data available'
     try {
-      if (squareLocId) {
-        const lyStart  = addDays(week_start, -364)
-        const lyEnd    = addDays(week_start, -358)
-        const baseUrl  = process.env.NEXT_PUBLIC_BASE_URL || 'https://momo-system-m1nv.vercel.app'
-        const res      = await fetch(`${baseUrl}/api/square?action=sales&square_location_id=${squareLocId}&start_date=${lyStart}&end_date=${lyEnd}`)
-        if (res.ok) {
-          const d = await res.json()
-          squareSummary = `Last year same week (${lyStart} to ${lyEnd}): ${d.orderCount ?? 0} transactions, $${(d.netSales ?? 0).toFixed(0)} net sales`
+      if (squareLocId && sqToken) {
+        const lyStart = addDays(week_start, -364)
+        const lyEnd   = addDays(week_start, -358)
+        const res = await fetch(
+          `https://connect.squareup.com/v2/payments?location_id=${squareLocId}&begin_time=${lyStart}T07:00:00Z&end_time=${lyEnd}T06:59:59Z&limit=200`,
+          { headers: { Authorization: `Bearer ${sqToken}`, 'Square-Version': '2024-01-18' } }
+        )
+        const data = await res.json()
+        const payments = (data.payments ?? []).filter((p: any) => p.status === 'COMPLETED')
+        const revenue  = payments.reduce((s: number, p: any) => s + (p.total_money?.amount ?? 0), 0) / 100
+        if (payments.length > 0) {
+          squareSummary = `Last year same week (${lyStart} to ${lyEnd}): ${payments.length} transactions, $${revenue.toFixed(0)} gross sales`
         }
       }
     } catch (e) {
