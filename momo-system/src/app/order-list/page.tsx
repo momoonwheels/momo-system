@@ -21,6 +21,10 @@ type ShopStatus = 'full' | 'partial' | null
 // Newport orders 50% more than needed for non-perishable items
 const NEWPORT_BUFFER = 1.5
 
+// Perishable ingredients — ordered exact (no buffer) because short shelf life
+// Corresponds to: Bone-in Chicken, Roma Tomatoes, Cilantro
+const PERISHABLE_CODES = new Set(['CHK-BI', 'TOM', 'CIL'])
+
 // Logical shopping order
 const CATEGORY_ORDER = ['Protein', 'Produce', 'Dry Goods', 'Sauce', 'Oil', 'Spice', 'Pantry', 'Supplies', 'Overhead', 'Other']
 
@@ -156,7 +160,7 @@ export default function OrderListPage() {
         const currentOnHand = (onHand[line.code] || 0) * conv
         const netNeeded    = Math.max(0, recipeQty - currentOnHand)
         const minQty       = Number(ing.min_order_qty) || 1
-        const isPerishable = ing.is_perishable ?? false
+        const isPerishable = PERISHABLE_CODES.has(ing.code || line.code)
         const buffered     = isPerishable ? netNeeded : netNeeded * NEWPORT_BUFFER
         const vendorQty    = netNeeded <= 0
           ? 0
@@ -212,7 +216,7 @@ export default function OrderListPage() {
     const currentOnHand = (onHand[line.code] || 0) * conv
     const netNeeded     = Math.max(0, needed - currentOnHand)
     if (netNeeded <= 0) return 0
-    const isPerishable  = meta[line.code]?.is_perishable ?? false
+    const isPerishable  = PERISHABLE_CODES.has(line.code)
     const buffered      = isPerishable ? netNeeded : netNeeded * NEWPORT_BUFFER
     const rawUnits      = conv > 0 ? buffered / conv : 0
     return Math.max(minQty, Math.ceil(rawUnits / minQty) * minQty)
@@ -425,7 +429,7 @@ export default function OrderListPage() {
                     const conv         = Number(line.convFactor) || 1
                     const currentOnHand = (onHand[line.code] || 0) * conv
                     const netNeeded    = Math.max(0, needed - currentOnHand)
-                    const isPerishable = ing?.is_perishable ?? false
+                    const isPerishable = PERISHABLE_CODES.has(line.code)
                     const unitsToBuy   = calcUnitsToBuy(line, ingMeta)
                     const status       = shopStatus[line.code]
 
