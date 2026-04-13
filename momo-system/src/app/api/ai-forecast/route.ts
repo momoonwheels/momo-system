@@ -58,7 +58,12 @@ export async function POST(req: NextRequest) {
       .limit(25)  // 5 weeks × 5 items max
 
     // Get up to 4 distinct week_starts actually in the DB
-    const historyWeeks = [...new Set((historyData ?? []).map((r: any) => r.week_start as string))].slice(0, 4)
+    const seen = new Set<string>()
+    const historyWeeks: string[] = []
+    for (const r of (historyData ?? [])) {
+      if (!seen.has(r.week_start)) { seen.add(r.week_start); historyWeeks.push(r.week_start) }
+      if (historyWeeks.length >= 4) break
+    }
     
     // The most recent week in history may be incomplete (current week still running)
     // Flag it so the AI knows not to treat it as a full week
