@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { createClient } from '@/utils/supabase/client'
+import { supabase } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -62,7 +62,7 @@ function weeksUntil(target: string): number {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ProductionPage() {
-  const supabase  = createClient()
+  
   const today     = new Date().toISOString().split('T')[0]
   const weekStart = getWeekStart(today)
 
@@ -89,7 +89,7 @@ export default function ProductionPage() {
     setLogs(logData ?? [])
     setReserves(resData ?? [])
     setLoading(false)
-  }, [supabase])
+  }, [])
 
   useEffect(() => { fetchData() }, [fetchData])
 
