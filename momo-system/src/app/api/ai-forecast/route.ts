@@ -193,7 +193,34 @@ export async function POST(req: NextRequest) {
       return `  Week of ${ws}:\n${ratios}`
     }).filter(Boolean).join('\n\n')
 
-    // ── 5. Build Claude prompt ────────────────────────────────────────────────
+    // ── 5. Fetch past forecast accuracy (for AI self-correction) ────────────
+    let accuracyText = 'No accuracy history yet — this is an early forecast.'
+    try {
+      const { data: accData } = await sb
+        .from('forecast_accuracy')
+        .select('week_start,ai_total_plates,actual_est_plates,ai_variance_pct')
+        .eq('location_id', location_id)
+        .eq('week_closed', true)
+        .order('week_start', { ascending: false })
+        .limit(8)
+
+      if (accData && accData.length > 0) {
+        const avgBias = Math.round(
+          accData.reduce((s: number, r: any) => s + (Number(r.ai_variance_pct) || 0), 0) / accData.length
+        )
+        const rows = accData.map((r: any) =>
+          `  ${r.week_start}: AI ~${r.ai_total_plates} plates, actual ~${r.actual_est_plates} plates, variance ${Number(r.ai_variance_pct) > 0 ? '+' : ''}${r.ai_variance_pct}%`
+        ).join('\n')
+        const biasNote = Math.abs(avgBias) > 5
+          ? `\n  ⚠️ You have been ${avgBias > 0 ? 'OVERestimating' : 'UNDERestimating'} by avg ${Math.abs(avgBias)}% — correct for this bias.`
+          : '\n  Bias within ±5% average — no systematic correction needed.'
+        accuracyText = `Past ${accData.length} closed weeks:\n${rows}${biasNote}`
+      }
+    } catch (e) {
+      console.warn('Accuracy fetch failed:', e)
+    }
+
+    // ── 6. Build Claude prompt ────────────────────────────────────────────────
     const weekEnd = addDays(week_start, 6)
 
     const prompt = `You are a sales forecasting assistant for Mo:Mo on the Wheels, a Nepalese food truck business in Oregon.
