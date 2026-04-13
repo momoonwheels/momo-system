@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
 
   if (summerRampUp && extraBatches > 0) {
     const { data: batchFmRows } = await sb
-      .from('recipe_matrix')
+      .from('recipe_items')
       .select('qty, ingredients(code)')
       .eq('context', 'BATCH_FM')
 
