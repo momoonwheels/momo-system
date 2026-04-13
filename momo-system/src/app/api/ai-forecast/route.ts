@@ -274,7 +274,16 @@ Respond ONLY with valid JSON (no markdown, no text outside the JSON):
       console.warn('Could not save AI note (table may not exist yet):', e)
     }
 
-    return NextResponse.json({ forecast, note })
+    return NextResponse.json({ 
+      forecast, 
+      note,
+      _debug: { 
+        squareLocId, 
+        squareSalesCount: squareSalesHistory.length,
+        squareSalesHistory,
+        historyWeeks,
+      }
+    })
 
   } catch (e: any) {
     console.error('AI forecast error:', e)
