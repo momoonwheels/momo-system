@@ -165,19 +165,33 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 4. Format history for prompt ─────────────────────────────────────────
-    const historyText = historyWeeks.map(ws => {
-      const rows = (historyData ?? []).filter(r => r.week_start === ws)
-      if (!rows.length) return `Week of ${ws}: no data recorded`
-      const grandTotal = rows.reduce((s, r) =>
+    const AVG_PLATE_PRICE = 14.5
+
+    // Section 1: Square actual sales volume
+    const squareVolumeText = squareSalesHistory.length > 0
+      ? squareSalesHistory.map(s => {
+          const estPlates = Math.round(s.grossSales / AVG_PLATE_PRICE)
+          const partial   = s.isPartial ? ' ⚠️ PARTIAL (still running)' : ' (complete)'
+          return `  ${s.weekStart}${partial}: $${s.grossSales.toFixed(0)} gross, ${s.orderCount} transactions, ~${estPlates} plates`
+        }).join('\n')
+      : '  No Square data available'
+
+    // Section 2: Item mix ratios (percentages, not totals)
+    const mixRatioText = historyWeeks.map(ws => {
+      const rows = (historyData ?? []).filter((r: any) => r.week_start === ws)
+      if (!rows.length) return null
+      const grandTotal = rows.reduce((s: number, r: any) =>
         s + operating_days.reduce((ds: number, d: string) => ds + (Number(r[d]) || 0), 0), 0)
-      const byItem = rows.map(r => {
+      if (grandTotal === 0) return null
+      const ratios = rows.map((r: any) => {
         const code  = (r.menu_items as any)?.code ?? '?'
-        const days  = operating_days.map((d: string) => `${d}:${r[d] ?? 0}`).join(' ')
         const total = operating_days.reduce((ds: number, d: string) => ds + (Number(r[d]) || 0), 0)
-        return `  ${code}: [${days}] total=${total}`
+        const pct   = Math.round((total / grandTotal) * 100)
+        const days  = operating_days.map((d: string) => `${d}:${r[d] ?? 0}`).join(' ')
+        return `    ${code}: ${pct}% [${days}]`
       }).join('\n')
-      return `Week of ${ws} (${grandTotal} plates total):\n${byItem}`
-    }).join('\n\n')
+      return `  Week of ${ws}:\n${ratios}`
+    }).filter(Boolean).join('\n\n')
 
     // ── 5. Build Claude prompt ────────────────────────────────────────────────
     const weekEnd = addDays(week_start, 6)
