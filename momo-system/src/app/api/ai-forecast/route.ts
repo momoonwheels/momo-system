@@ -47,30 +47,64 @@ export async function POST(req: NextRequest) {
 
     const sb = createServerClient()
 
-    // ── 1. Last 4 weeks of planned orders ─────────────────────────────────── 
-    // Fetch actual weeks from DB (not calculated) so dates always align
+    // ── 1. Get Square location ID for this app location ─────────────────────
+    const { data: sqMapping } = await sb
+      .from('square_locations')
+      .select('square_location_id')
+      .eq('app_location_id', location_id)
+      .maybeSingle()
+    const squareLocId = sqMapping?.square_location_id ?? null
+
+    // ── 2. Last 4 weeks of planned orders (for item mix ratios only) ──────────
     const { data: historyData } = await sb
       .from('planned_orders')
       .select('*, menu_items(code)')
       .eq('location_id', location_id)
       .lt('week_start', week_start)
       .order('week_start', { ascending: false })
-      .limit(25)  // 5 weeks × 5 items max
+      .limit(25)
 
-    // Get up to 4 distinct week_starts actually in the DB
     const seen = new Set<string>()
     const historyWeeks: string[] = []
     for (const r of (historyData ?? [])) {
       if (!seen.has(r.week_start)) { seen.add(r.week_start); historyWeeks.push(r.week_start) }
       if (historyWeeks.length >= 4) break
     }
-    
-    // The most recent week in history may be incomplete (current week still running)
-    // Flag it so the AI knows not to treat it as a full week
+
     const today = new Date().toISOString().split('T')[0]
     const mostRecentWeek = historyWeeks[0] ?? ''
-    const mostRecentWeekEnd = addDays(mostRecentWeek, 13) // generous window
-    const mostRecentIsPartial = mostRecentWeek && mostRecentWeekEnd >= today
+    const mostRecentIsPartial = mostRecentWeek && addDays(mostRecentWeek, 13) >= today
+
+    // ── 3. Fetch actual Square sales for each history week ────────────────────
+    type WeekSales = { weekStart: string; netSales: number; orderCount: number; isPartial: boolean }
+    const squareSalesHistory: WeekSales[] = []
+
+    if (squareLocId) {
+      for (let i = 0; i < historyWeeks.length; i++) {
+        const ws  = historyWeeks[i]
+        const we  = addDays(ws, 6)
+        const isP = i === 0 && !!mostRecentIsPartial
+        try {
+          // Call our own /api/square endpoint internally via absolute URL
+          const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://momo-system-m1nv.vercel.app'
+          const res = await fetch(
+            `${baseUrl}/api/square?action=sales&square_location_id=${squareLocId}&start_date=${ws}&end_date=${we}`,
+            { headers: { 'x-internal': '1' } }
+          )
+          if (res.ok) {
+            const d = await res.json()
+            squareSalesHistory.push({
+              weekStart:  ws,
+              netSales:   d.netSales   ?? 0,
+              orderCount: d.orderCount ?? 0,
+              isPartial:  isP,
+            })
+          }
+        } catch (e) {
+          console.error('Square weekly fetch failed for', ws, e)
+        }
+      }
+    }
 
     // ── 2. Weather forecast (Open-Meteo, free, no key) ───────────────────────
     let weatherSummary = 'Weather: unavailable'
@@ -94,41 +128,21 @@ export async function POST(req: NextRequest) {
       console.error('Weather fetch failed:', e)
     }
 
-    // ── 3. Square last year same week (best effort) ───────────────────────────
+    // ── 4. Square last year same week (best effort) ──────────────────────────
     let squareSummary = 'Last year same week: no Square data available'
     try {
-      const sqToken = process.env.SQUARE_ACCESS_TOKEN
-      if (sqToken) {
-        const lyStart = addDays(week_start, -364)
-        const lyEnd   = addDays(week_start, -358)
-
-        // Match Square location by name
-        const sqLocsRes = await fetch('https://connect.squareup.com/v2/locations', {
-          headers: { Authorization: `Bearer ${sqToken}`, 'Square-Version': '2024-01-18' }
-        })
-        const sqLocs = await sqLocsRes.json()
-        const n = location_name.toLowerCase()
-        const sqLoc = (sqLocs.locations ?? []).find((l: any) => {
-          const ln = l.name?.toLowerCase() ?? ''
-          return n.includes('lincoln')
-            ? ln.includes('lincoln') || ln.includes('pines')
-            : ln.includes('salem')
-        })
-
-        if (sqLoc) {
-          const pmtRes = await fetch(
-            `https://connect.squareup.com/v2/payments?location_id=${sqLoc.id}&begin_time=${lyStart}T07:00:00Z&end_time=${lyEnd}T06:59:59Z&limit=200`,
-            { headers: { Authorization: `Bearer ${sqToken}`, 'Square-Version': '2024-01-18' } }
-          )
-          const pmtData  = await pmtRes.json()
-          const payments = pmtData.payments ?? []
-          const revenue  = payments.reduce((s: number, p: any) => s + (p.total_money?.amount ?? 0), 0) / 100
-          const txCount  = payments.length
-          squareSummary = `Last year same week (${lyStart} to ${lyEnd}): ${txCount} transactions, $${revenue.toFixed(0)} total revenue at ${location_name}`
+      if (squareLocId) {
+        const lyStart  = addDays(week_start, -364)
+        const lyEnd    = addDays(week_start, -358)
+        const baseUrl  = process.env.NEXT_PUBLIC_BASE_URL || 'https://momo-system-m1nv.vercel.app'
+        const res      = await fetch(`${baseUrl}/api/square?action=sales&square_location_id=${squareLocId}&start_date=${lyStart}&end_date=${lyEnd}`)
+        if (res.ok) {
+          const d = await res.json()
+          squareSummary = `Last year same week (${lyStart} to ${lyEnd}): ${d.orderCount ?? 0} transactions, $${(d.netSales ?? 0).toFixed(0)} net sales`
         }
       }
     } catch (e) {
-      console.error('Square fetch failed:', e)
+      console.error('Square last year fetch failed:', e)
     }
 
     // ── 4. Format history for prompt ─────────────────────────────────────────
@@ -174,9 +188,11 @@ BUSINESS CONTEXT:
 - CW (Chowmein) is typically 15–20% of total plates
 - REG (Regular Mo:Mo) is typically the top seller at 35–40% of plates
 - April is shoulder season in Lincoln City, ramping toward summer peak (June–September)
-- IMPORTANT: Any week marked ⚠️ PARTIAL WEEK is still in progress — use it only for daily rate context, not total volume trends
-- IMPORTANT: Salem opened April 3, 2026 — early weeks are partial and sales are still growing as word spreads
-- Look at week-over-week trends using only COMPLETE weeks
+- IMPORTANT: Any week marked ⚠️ PARTIAL — week still in progress means it has not ended yet. Use daily rate to extrapolate, do NOT use its total as a full-week number
+- IMPORTANT: Salem opened April 3, 2026 — it is a new location still growing its customer base. Expect upward trend over first months
+- IMPORTANT: Sales history shows ACTUAL Square revenue where available — this is real money collected, not forecasted plates
+- Use ~$14.50 average plate price to convert revenue to plate estimates if needed
+- Look at week-over-week trends using only COMPLETE weeks — ignore partial week totals
 
 TASK: Forecast how many plates of each menu item will sell on each operating day for the week of ${week_start}.
 
