@@ -10,21 +10,24 @@ const ST_PACKAGES = [
   'ST-NAP','ST-5-JLID','ST-6-GLOVE','ST-7-FILM',
 ]
 
-// Fixed-stock items at Newport — min qty to maintain, reorder when below this
-// Cleaning supplies: 2 per location × 3 locations = 6 total Newport min
 const FIXED_STOCK: Record<string, number> = {
-  'BOUL':  192,  // 6 bottles × 32 oz (2 per location × 3)
-  'COIL':  105,  // 3 containers × 35 lbs (1 per location × 3)
-  'SALT':  96,   // 6 bottles × 16 oz (2 per location × 3)
-  'DISH':  6,   // Dishwashing Soap — 2 per location × 3
-  'CLORX': 6,   // Sanitizer — 2 per location × 3
-  'SPON':  6,   // Sponges/Scrubs — 2 per location × 3
-  'WFOIL': 3,   // Plastic Film — 1 per location × 3
-  'GLOVE': 3,   // Gloves — 1 case per location × 3
-  'PTOW':  6,   // Paper Towels — 2 per location × 3
-  'TRASH': 3,   // Trash Bags — 1 per location × 3
-  'TWLS':  6,   // Towels — 2 per location × 3
+  'BOUL':  192,
+  'COIL':  105,
+  'SALT':  96,
+  'DISH':  6,
+  'CLORX': 6,
+  'SPON':  6,
+  'WFOIL': 3,
+  'GLOVE': 3,
+  'PTOW':  6,
+  'TRASH': 3,
+  'TWLS':  6,
 }
+
+const PIECES_PER_BATCH   = 440
+const WEEKLY_MOMO_TARGET = 4400
+const TARGET_BATCHES     = WEEKLY_MOMO_TARGET / PIECES_PER_BATCH  // 10
+const MOMOS_PER_PLATE    = 10
 
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
@@ -67,12 +70,34 @@ export async function GET(req: NextRequest) {
   const [cfg, recipeMap] = await Promise.all([getConfig(), getRecipeMap()])
   const needs = calcIngredientNeeds(orders, cfg, recipeMap)
 
-  // Inject fixed-stock items
+  // ── Summer Ramp Up ───────────────────────────────────────────────────────────
+  // When ON: BATCH_FM ingredients (dough + filling) are topped up to always
+  // reflect 4,400 momos (10 batches) regardless of forecast.
+  // Everything else — achar, jhol, chilli sauce, chowmein — stays at forecast.
+  // Toggle via SUMMER_RAMP_UP in config table (0 = off, 1 = on).
+  const summerRampUp    = Number(cfg['SUMMER_RAMP_UP'] ?? 0) === 1
+  const forecastMomos   = (orders.REG + orders.FRI + orders.CHI + orders.JHO) * MOMOS_PER_PLATE
+  const forecastBatches = forecastMomos / PIECES_PER_BATCH
+  const extraBatches    = TARGET_BATCHES - forecastBatches
+
+  if (summerRampUp && extraBatches > 0) {
+    const { data: batchFmRows } = await sb
+      .from('recipe_matrix')
+      .select('qty, ingredients(code)')
+      .eq('context', 'BATCH_FM')
+
+    for (const row of batchFmRows || []) {
+      const code = (row.ingredients as any)?.code
+      if (!code) continue
+      needs[code] = (needs[code] ?? 0) + extraBatches * Number(row.qty)
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   for (const [code, minQty] of Object.entries(FIXED_STOCK)) {
     needs[code] = minQty
   }
 
-  // ST items: 1 case per truck that has ≤ 0.5 remaining
   const { data: allTruckData } = await sb
     .from('truck_inventory')
     .select('quantity, delivery_received, packages!inner(code)')
@@ -90,7 +115,6 @@ export async function GET(req: NextRequest) {
     if ((stNeedsMap[code] ?? 0) > 0) needs[code] = stNeedsMap[code]
   }
 
-  // Newport inventory
   const { data: invData } = await sb.from('newport_inventory')
     .select('quantity_on_hand, ingredients(code)')
 
@@ -101,9 +125,8 @@ export async function GET(req: NextRequest) {
   }
   for (const code of ST_PACKAGES) inventoryMap[code] = 0
 
-  // Ingredient metadata
   const { data: ingData } = await sb.from('ingredients')
-    .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit')
+    .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit,is_perishable')
     .order('sort_order')
 
   const meta: Record<string,{convFactor:number;minOrderQty:number}> = {}
@@ -118,5 +141,5 @@ export async function GET(req: NextRequest) {
   }
 
   const lines = calcOrderLines(needs, inventoryMap, meta)
-  return NextResponse.json({ lines, ingredients: ingData, orders })
+  return NextResponse.json({ lines, ingredients: ingData, orders, summerRampUp })
 }
