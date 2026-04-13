@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import { ChevronLeft, ChevronRight, Save, RefreshCw, Sun, Moon, Sparkles, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Save, RefreshCw, Sun, Moon, Sparkles, X, Lock, TrendingUp } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -81,9 +81,12 @@ export default function PlannedOrdersPage() {
   const [orders,      setOrders]      = useState<Record<string, OrderRow>>({})
   const [loading,     setLoading]     = useState(false)
   const [saving,      setSaving]      = useState(false)
-  const [forecasting, setForecasting] = useState(false)
-  const [aiNote,      setAiNote]      = useState<string>('')
-  const [showNote,    setShowNote]    = useState(false)
+  const [forecasting,   setForecasting]   = useState(false)
+  const [aiNote,        setAiNote]        = useState<string>('')
+  const [showNote,      setShowNote]      = useState(false)
+  const [accuracy,      setAccuracy]      = useState<any[]>([])
+  const [closingWeek,   setClosingWeek]   = useState(false)
+  const [squareLocMap,  setSquareLocMap]  = useState<Record<string,string>>({})
 
   const location      = locations.find(l => l.id === locationId)
   const operatingDays = location?.operating_days ?? ALL_DAYS.map(d => d.key)
@@ -94,10 +97,14 @@ export default function PlannedOrdersPage() {
   // ─── Load reference data ──────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
-      const [{ data: locs }, { data: items }] = await Promise.all([
+      const [{ data: locs }, { data: items }, { data: sqMap }] = await Promise.all([
         supabase.from('locations').select('id,name,week_start_day,operating_days,is_summer_schedule').order('name'),
         supabase.from('menu_items').select('id,name,code,sort_order').order('sort_order'),
+        supabase.from('square_locations').select('app_location_id,square_location_id'),
       ])
+      const mapping: Record<string,string> = {}
+      for (const m of sqMap ?? []) mapping[m.app_location_id] = m.square_location_id
+      setSquareLocMap(mapping)
       const locList = (locs ?? []) as Location[]
       setLocations(locList)
       setMenuItems((items ?? []) as MenuItem[])
@@ -112,6 +119,14 @@ export default function PlannedOrdersPage() {
   }, [])
 
   // ─── Load orders + AI note ────────────────────────────────────────────────
+  // Load accuracy history when location changes
+  useEffect(() => {
+    if (!locationId) return
+    fetch(`/api/forecast-accuracy?location_id=${locationId}&limit=8`)
+      .then(r => r.json()).then(d => setAccuracy(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [locationId])
+
   const loadOrders = useCallback(async () => {
     if (!locationId || !weekStart) return
     setLoading(true)
@@ -260,12 +275,51 @@ export default function PlannedOrdersPage() {
           { onConflict: 'location_id,menu_item_id,week_start' }
         )
       if (error) throw error
+
+      // Save adjusted forecast to accuracy tracker
+      const savedForecast: Record<string, Record<string, number>> = {}
+      let savedTotal = 0
+      for (const item of menuItems) {
+        const row = orders[item.id]
+        if (!row) continue
+        savedForecast[item.code] = { mon: row.mon, tue: row.tue, wed: row.wed, thu: row.thu, fri: row.fri, sat: row.sat, sun: row.sun }
+        savedTotal += visibleDays.reduce((s, d) => s + (row[d] ?? 0), 0)
+      }
+      fetch('/api/forecast-accuracy', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'saved', location_id: locationId, week_start: weekStart, saved_forecast: savedForecast, saved_total_plates: savedTotal }),
+      }).catch(() => {})
+
       toast.success('Orders saved!')
       loadOrders()
     } catch (e: any) {
       toast.error(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ─── Close Week ────────────────────────────────────────────────────────────
+  const closeWeek = async () => {
+    const squareLocId = squareLocMap[locationId]
+    if (!squareLocId) { toast.error('Square location not mapped — check Income Statement → Square Setup'); return }
+    if (!confirm(`Lock actuals from Square for week of ${weekStart}?`)) return
+    setClosingWeek(true)
+    try {
+      const res = await fetch('/api/forecast-accuracy', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'close', location_id: locationId, week_start: weekStart, square_location_id: squareLocId }),
+      })
+      const data = await res.json()
+      if (!res.ok) { toast.error(data.error); return }
+      toast.success(`Week closed — actual ~${data.actualEstPlates} plates, AI was ${data.aiVariancePct > 0 ? '+' : ''}${data.aiVariancePct}%`)
+      // Refresh accuracy
+      fetch(`/api/forecast-accuracy?location_id=${locationId}&limit=8`)
+        .then(r => r.json()).then(d => setAccuracy(Array.isArray(d) ? d : [])).catch(() => {})
+    } catch (e: any) {
+      toast.error(e.message)
+    } finally {
+      setClosingWeek(false)
     }
   }
 
@@ -288,6 +342,16 @@ export default function PlannedOrdersPage() {
         sub="Weekly sales forecast by location"
         action={
           <div className="flex items-center gap-2">
+            {weekStart < new Date().toISOString().split('T')[0] && (
+              <button
+                onClick={closeWeek}
+                disabled={closingWeek}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+              >
+                {closingWeek ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                Close Week
+              </button>
+            )}
             <button
               onClick={handleAiForecast}
               disabled={forecasting || !weekStart}
@@ -452,6 +516,56 @@ export default function PlannedOrdersPage() {
             </table>
           </div>
         </Card>
+      )}
+
+      {/* Accuracy history panel */}
+      {accuracy.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingUp className="w-4 h-4 text-purple-500" />
+            <span className="text-sm font-semibold text-gray-700">AI Forecast Accuracy</span>
+            <span className="text-xs text-gray-400">({accuracy.length} closed weeks)</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100 text-gray-400">
+                  <th className="text-left pb-1.5 pr-4">Week</th>
+                  <th className="text-right pb-1.5 px-3">AI Forecast</th>
+                  <th className="text-right pb-1.5 px-3">You Saved</th>
+                  <th className="text-right pb-1.5 px-3">Actual</th>
+                  <th className="text-right pb-1.5 pl-3">AI Variance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accuracy.map(r => {
+                  const aiV = Number(r.ai_variance_pct)
+                  const varColor = Math.abs(aiV) <= 5 ? 'text-green-600' : Math.abs(aiV) <= 15 ? 'text-amber-600' : 'text-red-600'
+                  return (
+                    <tr key={r.week_start} className="border-b border-gray-50 last:border-0">
+                      <td className="py-1.5 pr-4 text-gray-600">{r.week_start}</td>
+                      <td className="py-1.5 px-3 text-right text-gray-600">{r.ai_total_plates ?? '—'}</td>
+                      <td className="py-1.5 px-3 text-right text-gray-600">{r.saved_total_plates ?? '—'}</td>
+                      <td className="py-1.5 px-3 text-right font-medium text-gray-800">~{r.actual_est_plates}</td>
+                      <td className={`py-1.5 pl-3 text-right font-semibold ${varColor}`}>
+                        {aiV > 0 ? '+' : ''}{aiV}%
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {accuracy.length >= 3 && (() => {
+            const avg = Math.round(accuracy.reduce((s, r) => s + Number(r.ai_variance_pct), 0) / accuracy.length)
+            return (
+              <p className="text-xs text-gray-400 mt-2">
+                Avg AI variance: <span className={`font-semibold ${Math.abs(avg) <= 5 ? 'text-green-600' : 'text-amber-600'}`}>{avg > 0 ? '+' : ''}{avg}%</span>
+                {Math.abs(avg) > 5 && ` — AI is systematically ${avg > 0 ? 'over' : 'under'}forecasting, it will self-correct next time`}
+              </p>
+            )
+          })()}
+        </div>
       )}
 
       {location && (
