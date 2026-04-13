@@ -185,7 +185,11 @@ Respond ONLY with valid JSON (no markdown, no text outside the JSON):
     // ── 6. Call Claude API ────────────────────────────────────────────────────
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY ?? '',
+        'anthropic-version': '2023-06-01',
+      },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1000,
@@ -222,6 +226,6 @@ Respond ONLY with valid JSON (no markdown, no text outside the JSON):
 
   } catch (e: any) {
     console.error('AI forecast error:', e)
-    return NextResponse.json({ error: e.message, stack: e.stack }, { status: 500 })
+    return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
