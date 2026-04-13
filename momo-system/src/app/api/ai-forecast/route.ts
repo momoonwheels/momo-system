@@ -186,41 +186,43 @@ export async function POST(req: NextRequest) {
 
 LOCATION: ${location_name}
 FORECAST WEEK: ${week_start} to ${weekEnd}
-OPERATING DAYS THIS WEEK: ${operating_days.join(', ')} (${operating_days.length} days)
+OPERATING DAYS: ${operating_days.join(', ')} (${operating_days.length} days)
 
-MENU ITEMS:
-${menu_items.map((m: any) => `- ${m.code}: ${m.name}`).join('\n')}
+MENU ITEMS: ${menu_items.map((m: any) => `${m.code}=${m.name}`).join(', ')}
 
-RECENT SALES HISTORY (plates per day, last 4 weeks):
-${historyText || 'No history available yet'}
+━━━ SECTION 1: ACTUAL SALES VOLUME (from Square POS) ━━━
+This is real transaction data. Use these numbers as the TRUE volume baseline.
+DO NOT use the item mix totals below as volume — they are planned forecasts, not actuals.
+${squareVolumeText}
 
+━━━ SECTION 2: ITEM MIX RATIOS (from planned orders — ratios only, NOT volume) ━━━
+Use these ONLY to split total volume across REG/FRI/CHI/JHO/CW and across days.
+The percentages and day distributions are the useful signal here, not the totals.
+${mixRatioText || '  No item mix data yet — use typical ratios: REG 35%, FRI 20%, CHI 15%, JHO 15%, CW 15%'}
+
+━━━ SECTION 3: WEATHER FORECAST ━━━
 ${weatherSummary}
 
+━━━ SECTION 4: LAST YEAR SAME WEEK ━━━
 ${squareSummary}
 
-BUSINESS CONTEXT:
-- Food truck operation in Oregon (Pacific Northwest)
+━━━ BUSINESS CONTEXT ━━━
 - Rain and cold weather significantly reduces walk-up food truck sales
-- Lincoln City is a coastal tourist town — weekend and summer sales are much higher than weekdays
-- Salem is an inland city with more consistent weekday demand (opened April 3, 2026 — still building customer base)
-- Weekends (Fri/Sat/Sun) typically outsell weekdays 2–3x
-- CW (Chowmein) is typically 15–20% of total plates
-- REG (Regular Mo:Mo) is typically the top seller at 35–40% of plates
-- April is shoulder season in Lincoln City, ramping toward summer peak (June–September)
-- IMPORTANT: Any week marked ⚠️ PARTIAL — week still in progress means it has not ended yet. Use daily rate to extrapolate, do NOT use its total as a full-week number
-- IMPORTANT: Salem opened April 3, 2026 — it is a new location still growing its customer base. Expect upward trend over first months
-- IMPORTANT: Sales history shows ACTUAL Square revenue where available — this is real money collected, not forecasted plates
-- Use ~$14.50 average plate price to convert revenue to plate estimates if needed
-- Look at week-over-week trends using only COMPLETE weeks — ignore partial week totals
+- Lincoln City: coastal tourist town, weekends 2-3x weekdays, summer peak June-Sept
+- Salem: opened April 3 2026, still building customer base, expect upward trend
+- April is shoulder season at Lincoln City — warming toward summer
+- Partial weeks (⚠️) are still running — extrapolate from daily rate, ignore the total
 
-TASK: Forecast how many plates of each menu item will sell on each operating day for the week of ${week_start}.
+━━━ YOUR TASK ━━━
+Step 1: Determine total weekly plates using SECTION 1 (Square actuals) trend only.
+Step 2: Adjust for weather from SECTION 3.
+Step 3: Split total across items using SECTION 2 ratios.
+Step 4: Split each item across operating days using day distribution from SECTION 2.
 
-Rules:
-- Only put non-zero values on operating days: ${operating_days.join(', ')}
-- All other days must be 0
-- Be realistic — base your forecast on the history trend and weather impact
-- If weather looks bad (rain, cold), reduce weekend numbers
-- If weather is good, boost weekends slightly vs prior week
+RULES:
+- Operating days only: ${operating_days.join(', ')} — all other days must be 0
+- Reference ACTUAL Square sales for volume, not item mix totals
+- Partial weeks: use daily rate × remaining days to estimate full-week pace
 
 Respond ONLY with valid JSON (no markdown, no text outside the JSON):
 {
@@ -231,7 +233,7 @@ Respond ONLY with valid JSON (no markdown, no text outside the JSON):
     "JHO": { "mon": 0, "tue": 0, "wed": 0, "thu": 0, "fri": 0, "sat": 0, "sun": 0 },
     "CW":  { "mon": 0, "tue": 0, "wed": 0, "thu": 0, "fri": 0, "sat": 0, "sun": 0 }
   },
-  "note": "2-3 sentence explanation covering: what trend the data shows, how weather affected the forecast, and the projected total plates vs last week."
+  "note": "2-3 sentences: cite the actual Square revenue figures you used, explain the weather impact, and state your projected total plates for the week."
 }`
 
     // ── 6. Call Claude API ────────────────────────────────────────────────────
