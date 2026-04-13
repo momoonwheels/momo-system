@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ClipboardList, Package, ShoppingCart,
   Truck, Receipt, Settings, BookOpen, UtensilsCrossed, Users,
-  TrendingUp, Banknote, FileText, X, LogOut, Warehouse, Globe
+  TrendingUp, Banknote, FileText, X, LogOut, Warehouse, Globe, Factory
 } from 'lucide-react'
 const nav = [
   { href: '/dashboard',        icon: LayoutDashboard, label: 'Dashboard'        },
@@ -12,6 +12,7 @@ const nav = [
   { href: '/truck-inventory',  icon: Truck,           label: 'Truck Inventory'  },
   { href: '/packaging',        icon: Package,         label: 'Packaging'        },
   { href: '/order-list',       icon: ShoppingCart,    label: 'Order List'       },
+  { href: '/production',       icon: Factory,         label: 'Production'       },
   { href: '/fixed-inventory',  icon: Warehouse,       label: 'Fixed Inventory'  },
   { href: '/receipts',         icon: Receipt,         label: 'Receipts & COGS'  },
   { href: '/recipe-matrix',    icon: BookOpen,        label: 'Recipe Matrix'    },
