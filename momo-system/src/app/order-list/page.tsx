@@ -230,7 +230,7 @@ export default function OrderListPage() {
     return acc
   }, {})
 
-  const sortedGroupEntries = Object.entries(grouped)
+  const sortedGroupEntries: [string, any[]][] = Object.entries(grouped)
     .sort(([a], [b]) => {
       const ai = CATEGORY_ORDER.indexOf(a)
       const bi = CATEGORY_ORDER.indexOf(b)
@@ -238,10 +238,10 @@ export default function OrderListPage() {
     })
     .map(([cat, catLines]) => [
       cat,
-      [...catLines].sort((a: any, b: any) =>
+      (catLines as any[]).sort((a: any, b: any) =>
         (ingMeta[a.code]?.sort_order ?? 999) - (ingMeta[b.code]?.sort_order ?? 999)
       )
-    ] as [string, any[]])
+    ])
 
   const totalToBuy   = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0).length
   const toBuyLines   = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0)
