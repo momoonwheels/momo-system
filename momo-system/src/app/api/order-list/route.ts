@@ -126,7 +126,7 @@ export async function GET(req: NextRequest) {
   for (const code of ST_PACKAGES) inventoryMap[code] = 0
 
   const { data: ingData } = await sb.from('ingredients')
-    .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit,is_perishable')
+    .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit,is_perishable,sort_order')
     .order('sort_order')
 
   const meta: Record<string,{convFactor:number;minOrderQty:number}> = {}
