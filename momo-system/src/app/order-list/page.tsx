@@ -21,6 +21,9 @@ type ShopStatus = 'full' | 'partial' | null
 // Newport orders 50% more than needed for non-perishable items
 const NEWPORT_BUFFER = 1.5
 
+// Logical shopping order
+const CATEGORY_ORDER = ['Protein', 'Produce', 'Dry Goods', 'Sauce', 'Oil', 'Spice', 'Pantry', 'Supplies', 'Overhead', 'Other']
+
 const SHOP_STATUS_KEY = (weekStart: string) => `shop_status_${weekStart}`
 
 function loadShopStatus(weekStart: string): Record<string, ShopStatus> {
@@ -229,6 +232,7 @@ export default function OrderListPage() {
 
   const totalToBuy   = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0).length
   const toBuyLines   = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0)
+
   const doneCount    = toBuyLines.filter((l: any) => shopStatus[l.code] === 'full').length
   const partialCount = toBuyLines.filter((l: any) => shopStatus[l.code] === 'partial').length
 
@@ -393,7 +397,7 @@ export default function OrderListPage() {
               Non-perishable items are ordered 50% above need. Perishables (Bone-in Chicken, Tomatoes, Cilantro) are ordered exact.
             </div>
 
-            {(Object.entries(grouped) as [string,any[]][]).map(([category, catLines]) => (
+            {sortedGroupEntries.map(([category, catLines]) => (
               <Card key={category} className="p-0 overflow-hidden">
                 <div className="px-4 py-2.5 bg-brand-900 text-white font-semibold text-sm flex justify-between">
                   <span>{category}</span>
