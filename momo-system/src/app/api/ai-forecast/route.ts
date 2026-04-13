@@ -47,15 +47,25 @@ export async function POST(req: NextRequest) {
 
     const sb = createServerClient()
 
-    // ── 1. Last 4 weeks of planned orders ────────────────────────────────────
-    const historyWeeks = Array.from({ length: 4 }, (_, i) => addDays(week_start, -(i + 1) * 7))
-
+    // ── 1. Last 4 weeks of planned orders ─────────────────────────────────── 
+    // Fetch actual weeks from DB (not calculated) so dates always align
     const { data: historyData } = await sb
       .from('planned_orders')
       .select('*, menu_items(code)')
       .eq('location_id', location_id)
-      .in('week_start', historyWeeks)
+      .lt('week_start', week_start)
       .order('week_start', { ascending: false })
+      .limit(25)  // 5 weeks × 5 items max
+
+    // Get up to 4 distinct week_starts actually in the DB
+    const historyWeeks = [...new Set((historyData ?? []).map((r: any) => r.week_start as string))].slice(0, 4)
+    
+    // The most recent week in history may be incomplete (current week still running)
+    // Flag it so the AI knows not to treat it as a full week
+    const today = new Date().toISOString().split('T')[0]
+    const mostRecentWeek = historyWeeks[0] ?? ''
+    const mostRecentWeekEnd = addDays(mostRecentWeek, 13) // generous window
+    const mostRecentIsPartial = mostRecentWeek && mostRecentWeekEnd >= today
 
     // ── 2. Weather forecast (Open-Meteo, free, no key) ───────────────────────
     let weatherSummary = 'Weather: unavailable'
@@ -154,12 +164,14 @@ BUSINESS CONTEXT:
 - Food truck operation in Oregon (Pacific Northwest)
 - Rain and cold weather significantly reduces walk-up food truck sales
 - Lincoln City is a coastal tourist town — weekend and summer sales are much higher than weekdays
-- Salem is an inland city with more consistent weekday demand
+- Salem is an inland city with more consistent weekday demand (opened April 3, 2026 — still building customer base)
 - Weekends (Fri/Sat/Sun) typically outsell weekdays 2–3x
 - CW (Chowmein) is typically 15–20% of total plates
 - REG (Regular Mo:Mo) is typically the top seller at 35–40% of plates
 - April is shoulder season in Lincoln City, ramping toward summer peak (June–September)
-- Look at week-over-week trends: growing, declining, or stable?
+- IMPORTANT: Any week marked ⚠️ PARTIAL WEEK is still in progress — use it only for daily rate context, not total volume trends
+- IMPORTANT: Salem opened April 3, 2026 — early weeks are partial and sales are still growing as word spreads
+- Look at week-over-week trends using only COMPLETE weeks
 
 TASK: Forecast how many plates of each menu item will sell on each operating day for the week of ${week_start}.
 
