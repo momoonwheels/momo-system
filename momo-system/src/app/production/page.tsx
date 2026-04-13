@@ -3,8 +3,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 type ProductionLog = {
   id: string
   production_date: string
@@ -24,17 +22,13 @@ type FrozenReserve = {
   updated_at: string
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const PIECES_PER_BATCH  = 440
 const CAPACITY_PER_DAY  = 880
 const TARGET_DAYS       = 5
 const WEEKLY_TARGET     = CAPACITY_PER_DAY * TARGET_DAYS  // 4,400
-const PIECES_PER_PACKET = 100                             // FM-1
+const PIECES_PER_PACKET = 100
 const SUMMER_START      = '2026-06-15'
 const WEEKDAYS          = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
-
-// ─── Date helpers ─────────────────────────────────────────────────────────────
 
 function getWeekStart(dateStr: string): string {
   const d   = new Date(dateStr + 'T12:00:00')
@@ -59,16 +53,15 @@ function weeksUntil(target: string): number {
   return Math.max(0, Math.round(ms / (7 * 24 * 60 * 60 * 1000)))
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
-
 export default function ProductionPage() {
-  
   const today     = new Date().toISOString().split('T')[0]
   const weekStart = getWeekStart(today)
 
-  const [logs,     setLogs]     = useState<ProductionLog[]>([])
-  const [reserves, setReserves] = useState<FrozenReserve[]>([])
-  const [loading,  setLoading]  = useState(true)
+  const [logs,          setLogs]          = useState<ProductionLog[]>([])
+  const [reserves,      setReserves]      = useState<FrozenReserve[]>([])
+  const [loading,       setLoading]       = useState(true)
+  const [summerRampUp,  setSummerRampUp]  = useState(false)
+  const [togglingRamp,  setTogglingRamp]  = useState(false)
 
   const [formDate,    setFormDate]    = useState(today)
   const [formBatches, setFormBatches] = useState(2)
@@ -82,16 +75,29 @@ export default function ProductionPage() {
   const [savingReserve,   setSavingReserve]   = useState(false)
 
   const fetchData = useCallback(async () => {
-    const [{ data: logData }, { data: resData }] = await Promise.all([
+    const [{ data: logData }, { data: resData }, { data: cfgData }] = await Promise.all([
       supabase.from('production_log').select('*').order('production_date', { ascending: false }).limit(35),
       supabase.from('frozen_reserve').select('*').order('week_start', { ascending: false }).limit(12),
+      supabase.from('config').select('key, value').eq('key', 'SUMMER_RAMP_UP').single(),
     ])
     setLogs(logData ?? [])
     setReserves(resData ?? [])
+    setSummerRampUp(Number(cfgData?.value ?? 0) === 1)
     setLoading(false)
   }, [])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  async function toggleSummerRampUp() {
+    setTogglingRamp(true)
+    const newVal = summerRampUp ? 0 : 1
+    const { error } = await supabase
+      .from('config')
+      .update({ value: newVal, updated_at: new Date().toISOString() })
+      .eq('key', 'SUMMER_RAMP_UP')
+    if (!error) setSummerRampUp(!summerRampUp)
+    setTogglingRamp(false)
+  }
 
   async function syncReserve(ws: string) {
     const we = addDays(ws, 6)
@@ -166,10 +172,44 @@ export default function ProductionPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
 
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Production Planner</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Track daily output · build frozen reserve · prepare for summer</p>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Production Planner</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Track daily output · build frozen reserve · prepare for summer</p>
+        </div>
+
+        {/* Summer Ramp Up toggle */}
+        <button
+          onClick={toggleSummerRampUp}
+          disabled={togglingRamp}
+          className={`flex-shrink-0 flex items-center gap-2.5 px-4 py-2.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-50 ${
+            summerRampUp
+              ? 'bg-orange-500 text-white shadow-lg shadow-orange-200 hover:bg-orange-600'
+              : 'bg-white border-2 border-gray-200 text-gray-600 hover:border-orange-300 hover:text-orange-600'
+          }`}
+        >
+          <span className="text-lg">{summerRampUp ? '☀️' : '🌤️'}</span>
+          <div className="text-left">
+            <div>{summerRampUp ? 'Summer Ramp Up: ON' : 'Summer Ramp Up: OFF'}</div>
+            <div className={`text-xs font-normal ${summerRampUp ? 'text-orange-100' : 'text-gray-400'}`}>
+              {summerRampUp ? 'Ordering for 4,400 momos/wk' : 'Ordering at forecast quantity'}
+            </div>
+          </div>
+        </button>
       </div>
+
+      {/* Ramp Up active banner */}
+      {summerRampUp && (
+        <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3 text-sm text-orange-800 flex items-center gap-2">
+          <span>☀️</span>
+          <span>
+            <strong>Summer Ramp Up is active.</strong> The Order List will always calculate
+            dough &amp; filling ingredients for 4,400 momos. Achar, jhol, chilli sauce and
+            chowmein still follow forecast. Turn off when summer is over to return to normal.
+          </span>
+        </div>
+      )}
 
       {/* ── This week ── */}
       <section className="bg-white rounded-2xl border border-gray-200 p-5">
@@ -363,8 +403,6 @@ export default function ProductionPage() {
     </div>
   )
 }
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function Stat({ value, sub, label, accent }: { value: string; sub?: string; label: string; accent?: 'green' | 'orange' }) {
   const color = accent === 'green' ? 'text-emerald-600' : accent === 'orange' ? 'text-orange-500' : 'text-gray-900'
