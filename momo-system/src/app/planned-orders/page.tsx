@@ -1,19 +1,19 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { format, addDays, parseISO, startOfWeek, nextWednesday, nextThursday, isBefore, isAfter } from 'date-fns'
+import { format, addDays, parseISO } from 'date-fns'
 import toast from 'react-hot-toast'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import { ChevronLeft, ChevronRight, Save, RefreshCw, Sun, Moon } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Save, RefreshCw, Sun, Moon, Sparkles, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Location {
   id: string
   name: string
-  week_start_day: string   // 'wednesday' | 'thursday' | 'monday'
-  operating_days: string[] // e.g. ['wed','thu','fri','sat','sun']
+  week_start_day: string
+  operating_days: string[]
   is_summer_schedule: boolean
 }
 
@@ -33,7 +33,6 @@ interface OrderRow {
   fri: number; sat: number; sun: number
 }
 
-// ─── Day config ───────────────────────────────────────────────────────────────
 const ALL_DAYS = [
   { key: 'mon', label: 'Mon' },
   { key: 'tue', label: 'Tue' },
@@ -46,32 +45,27 @@ const ALL_DAYS = [
 
 type DayKey = 'mon'|'tue'|'wed'|'thu'|'fri'|'sat'|'sun'
 
-// Get the ordered days for a location's week (starts on their week_start_day)
 function getOrderedDays(weekStartDay: string): DayKey[] {
   const order: DayKey[] = ['mon','tue','wed','thu','fri','sat','sun']
   const startIdx = {
-    monday: 0, tuesday: 1, wednesday: 2, thursday: 3,
-    friday: 4, saturday: 5, sunday: 6,
+    monday:0, tuesday:1, wednesday:2, thursday:3,
+    friday:4, saturday:5, sunday:6,
   }[weekStartDay] ?? 0
   return [...order.slice(startIdx), ...order.slice(0, startIdx)]
 }
 
-// Snap a date to the nearest past week_start_day for a location
 function snapToWeekStart(date: Date, weekStartDay: string): Date {
   const dayNum = {
-    monday: 1, tuesday: 2, wednesday: 3, thursday: 4,
-    friday: 5, saturday: 6, sunday: 0,
+    monday:1, tuesday:2, wednesday:3, thursday:4,
+    friday:5, saturday:6, sunday:0,
   }[weekStartDay] ?? 1
-
   const d = new Date(date)
-  const current = d.getDay() // 0=Sun, 1=Mon...
-  let diff = current - dayNum
+  let diff = d.getDay() - dayNum
   if (diff < 0) diff += 7
   d.setDate(d.getDate() - diff)
   return d
 }
 
-// Get the actual calendar date for a day key given a week_start date
 function getDayDate(weekStartDate: Date, weekStartDay: string, dayKey: DayKey): Date {
   const orderedDays = getOrderedDays(weekStartDay)
   const idx = orderedDays.indexOf(dayKey)
@@ -80,25 +74,26 @@ function getDayDate(weekStartDate: Date, weekStartDay: string, dayKey: DayKey): 
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function PlannedOrdersPage() {
-  const [locations, setLocations]   = useState<Location[]>([])
-  const [menuItems, setMenuItems]   = useState<MenuItem[]>([])
-  const [locationId, setLocationId] = useState<string>('')
-  const [weekStart, setWeekStart]   = useState<string>('')
-  const [orders, setOrders]         = useState<Record<string, OrderRow>>({})
-  const [loading, setLoading]       = useState(false)
-  const [saving, setSaving]         = useState(false)
+  const [locations,   setLocations]   = useState<Location[]>([])
+  const [menuItems,   setMenuItems]   = useState<MenuItem[]>([])
+  const [locationId,  setLocationId]  = useState<string>('')
+  const [weekStart,   setWeekStart]   = useState<string>('')
+  const [orders,      setOrders]      = useState<Record<string, OrderRow>>({})
+  const [loading,     setLoading]     = useState(false)
+  const [saving,      setSaving]      = useState(false)
+  const [forecasting, setForecasting] = useState(false)
+  const [aiNote,      setAiNote]      = useState<string>('')
+  const [showNote,    setShowNote]    = useState(false)
 
-  const location = locations.find(l => l.id === locationId)
+  const location      = locations.find(l => l.id === locationId)
   const operatingDays = location?.operating_days ?? ALL_DAYS.map(d => d.key)
   const weekStartDay  = location?.week_start_day ?? 'monday'
   const orderedDays   = getOrderedDays(weekStartDay)
+  const visibleDays   = orderedDays.filter(d => operatingDays.includes(d))
 
-  // Visible days: ordered by location's week, only operating days shown
-  const visibleDays = orderedDays.filter(d => operatingDays.includes(d))
-
-  // ─── Load locations + menu items ──────────────────────────────────────────
+  // ─── Load reference data ──────────────────────────────────────────────────
   useEffect(() => {
-    const fetchRef = async () => {
+    const init = async () => {
       const [{ data: locs }, { data: items }] = await Promise.all([
         supabase.from('locations').select('id,name,week_start_day,operating_days,is_summer_schedule').order('name'),
         supabase.from('menu_items').select('id,name,code,sort_order').order('sort_order'),
@@ -106,8 +101,6 @@ export default function PlannedOrdersPage() {
       const locList = (locs ?? []) as Location[]
       setLocations(locList)
       setMenuItems((items ?? []) as MenuItem[])
-
-      // Default to first non-Newport location
       const defaultLoc = locList.find(l => !l.name.toLowerCase().includes('newport')) ?? locList[0]
       if (defaultLoc) {
         setLocationId(defaultLoc.id)
@@ -115,31 +108,39 @@ export default function PlannedOrdersPage() {
         setWeekStart(format(snapped, 'yyyy-MM-dd'))
       }
     }
-    fetchRef()
+    init()
   }, [])
 
-  // ─── Load orders ──────────────────────────────────────────────────────────
+  // ─── Load orders + AI note ────────────────────────────────────────────────
   const loadOrders = useCallback(async () => {
     if (!locationId || !weekStart) return
     setLoading(true)
     try {
-      const { data } = await supabase
-        .from('planned_orders')
-        .select('*')
-        .eq('location_id', locationId)
-        .eq('week_start', weekStart)
+      const [{ data }, { data: noteData }] = await Promise.all([
+        supabase.from('planned_orders').select('*')
+          .eq('location_id', locationId).eq('week_start', weekStart),
+        supabase.from('planned_order_notes').select('notes')
+          .eq('location_id', locationId).eq('week_start', weekStart)
+          .maybeSingle(),
+      ])
 
       const map: Record<string, OrderRow> = {}
       for (const item of menuItems) {
         const existing = (data ?? []).find(r => r.menu_item_id === item.id)
         map[item.id] = existing ?? {
-          location_id: locationId,
-          menu_item_id: item.id,
-          week_start: weekStart,
+          location_id: locationId, menu_item_id: item.id, week_start: weekStart,
           mon:0, tue:0, wed:0, thu:0, fri:0, sat:0, sun:0,
         }
       }
       setOrders(map)
+
+      if (noteData?.notes) {
+        setAiNote(noteData.notes)
+        setShowNote(true)
+      } else {
+        setAiNote('')
+        setShowNote(false)
+      }
     } finally {
       setLoading(false)
     }
@@ -149,17 +150,13 @@ export default function PlannedOrdersPage() {
 
   // ─── Week navigation ──────────────────────────────────────────────────────
   const shiftWeek = (delta: number) => {
-    const d = parseISO(weekStart)
-    // For Salem (Thu-Wed), a "week" is 7 days but starts Thursday
-    // For LC (Wed-Sun), moving forward goes to next Wednesday
-    const daysInWeek = operatingDays.length >= 7 ? 7 : 7 // always shift by 7 calendar days
+    const d    = parseISO(weekStart)
     const next = addDays(d, delta * 7)
     setWeekStart(format(next, 'yyyy-MM-dd'))
   }
 
   const handleDatePick = (dateStr: string) => {
-    const d = new Date(dateStr + 'T12:00:00')
-    const snapped = snapToWeekStart(d, weekStartDay)
+    const snapped = snapToWeekStart(new Date(dateStr + 'T12:00:00'), weekStartDay)
     setWeekStart(format(snapped, 'yyyy-MM-dd'))
   }
 
@@ -176,31 +173,79 @@ export default function PlannedOrdersPage() {
   const toggleSummer = async () => {
     if (!location) return
     const isSummer = !location.is_summer_schedule
-    // LC summer adds Monday
-    const newDays = isSummer
+    const newDays  = isSummer
       ? ['mon','wed','thu','fri','sat','sun']
       : ['wed','thu','fri','sat','sun']
-
     await supabase.from('locations').update({
       is_summer_schedule: isSummer,
       operating_days: newDays,
     }).eq('id', locationId)
-
     setLocations(ls => ls.map(l =>
-      l.id === locationId
-        ? { ...l, is_summer_schedule: isSummer, operating_days: newDays }
-        : l
+      l.id === locationId ? { ...l, is_summer_schedule: isSummer, operating_days: newDays } : l
     ))
-    toast.success(isSummer ? '☀️ Summer schedule on — Mon added' : '🌙 Winter schedule — Mon removed')
+    toast.success(isSummer ? '☀️ Summer schedule on' : '🌙 Winter schedule')
+  }
+
+  // ─── AI Forecast ──────────────────────────────────────────────────────────
+  const handleAiForecast = async () => {
+    if (!location || !weekStart) return
+    setForecasting(true)
+    try {
+      const res = await fetch('/api/ai-forecast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id:    locationId,
+          week_start:     weekStart,
+          location_name:  location.name,
+          operating_days: operatingDays,
+          week_start_day: weekStartDay,
+          menu_items:     menuItems.map(m => ({ id: m.id, code: m.code, name: m.name })),
+        }),
+      })
+
+      const json = await res.json()
+      if (!res.ok || json.error) {
+        toast.error(json.error ?? 'AI forecast failed')
+        return
+      }
+
+      const { forecast, note } = json
+
+      // Map forecast (keyed by item code) back to orders state (keyed by item id)
+      setOrders(prev => {
+        const next = { ...prev }
+        for (const item of menuItems) {
+          const itemForecast = forecast[item.code]
+          if (!itemForecast) continue
+          next[item.id] = {
+            ...next[item.id],
+            mon: itemForecast.mon ?? 0,
+            tue: itemForecast.tue ?? 0,
+            wed: itemForecast.wed ?? 0,
+            thu: itemForecast.thu ?? 0,
+            fri: itemForecast.fri ?? 0,
+            sat: itemForecast.sat ?? 0,
+            sun: itemForecast.sun ?? 0,
+          }
+        }
+        return next
+      })
+
+      setAiNote(note)
+      setShowNote(true)
+      toast.success('AI forecast applied — review and save when ready')
+    } catch (e: any) {
+      toast.error(e.message)
+    } finally {
+      setForecasting(false)
+    }
   }
 
   // ─── Edit cell ────────────────────────────────────────────────────────────
   const updateCell = (menuItemId: string, day: DayKey, value: string) => {
     const num = Math.max(0, parseInt(value) || 0)
-    setOrders(prev => ({
-      ...prev,
-      [menuItemId]: { ...prev[menuItemId], [day]: num }
-    }))
+    setOrders(prev => ({ ...prev, [menuItemId]: { ...prev[menuItemId], [day]: num } }))
   }
 
   // ─── Save ─────────────────────────────────────────────────────────────────
@@ -210,8 +255,10 @@ export default function PlannedOrdersPage() {
       const rows = Object.values(orders)
       const { error } = await supabase
         .from('planned_orders')
-        .upsert(rows.map(r => ({ ...r, week_start: weekStart, location_id: locationId })),
-          { onConflict: 'location_id,menu_item_id,week_start' })
+        .upsert(
+          rows.map(r => ({ ...r, week_start: weekStart, location_id: locationId })),
+          { onConflict: 'location_id,menu_item_id,week_start' }
+        )
       if (error) throw error
       toast.success('Orders saved!')
       loadOrders()
@@ -222,25 +269,17 @@ export default function PlannedOrdersPage() {
     }
   }
 
-  // ─── Week label ───────────────────────────────────────────────────────────
+  // ─── Derived ──────────────────────────────────────────────────────────────
   const weekStartDate = weekStart ? parseISO(weekStart) : new Date()
   const weekEndDate   = addDays(weekStartDate, visibleDays.length - 1)
   const weekLabel     = weekStart
     ? `${format(weekStartDate, 'MMM d')} – ${format(weekEndDate, 'MMM d, yyyy')}`
     : '—'
 
-  // Column totals
-  const dayTotals = (day: DayKey) =>
-    Object.values(orders).reduce((s, r) => s + (r[day] ?? 0), 0)
-
-  // Row total (only operating days)
-  const rowTotal = (row: OrderRow) =>
-    visibleDays.reduce((s, d) => s + (row[d] ?? 0), 0)
-
+  const dayTotals  = (day: DayKey) => Object.values(orders).reduce((s, r) => s + (r[day] ?? 0), 0)
+  const rowTotal   = (row: OrderRow) => visibleDays.reduce((s, d) => s + (row[d] ?? 0), 0)
   const grandTotal = Object.values(orders).reduce((s, r) => s + rowTotal(r), 0)
-
-  const isLC = location?.name.toLowerCase().includes('lincoln') ||
-               location?.name.toLowerCase().includes('pines')
+  const isLC       = location?.name.toLowerCase().includes('lincoln') || location?.name.toLowerCase().includes('pines')
 
   return (
     <div className="space-y-6">
@@ -248,21 +287,32 @@ export default function PlannedOrdersPage() {
         title="Planned Orders"
         sub="Weekly sales forecast by location"
         action={
-          <button
-            onClick={save}
-            disabled={saving || !weekStart}
-            className="flex items-center gap-2 px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
-          >
-            {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            Save
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleAiForecast}
+              disabled={forecasting || !weekStart}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50 transition-colors"
+            >
+              {forecasting
+                ? <><RefreshCw className="w-4 h-4 animate-spin" /> Forecasting…</>
+                : <><Sparkles className="w-4 h-4" /> AI Forecast</>
+              }
+            </button>
+            <button
+              onClick={save}
+              disabled={saving || !weekStart}
+              className="flex items-center gap-2 px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
+            >
+              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save
+            </button>
+          </div>
         }
       />
 
       {/* Controls */}
       <Card>
         <div className="flex flex-wrap gap-4 items-center">
-          {/* Location picker */}
           <div className="flex items-center gap-2">
             <label className="text-sm font-medium text-gray-600">Location</label>
             <select
@@ -276,25 +326,20 @@ export default function PlannedOrdersPage() {
             </select>
           </div>
 
-          {/* Week nav */}
           <div className="flex items-center gap-2">
-            <button onClick={() => shiftWeek(-1)}
-              className="p-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">
+            <button onClick={() => shiftWeek(-1)} className="p-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">
               <ChevronLeft className="w-4 h-4" />
             </button>
             <input
-              type="date"
-              value={weekStart}
+              type="date" value={weekStart}
               onChange={e => handleDatePick(e.target.value)}
               className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-green-500"
             />
-            <button onClick={() => shiftWeek(1)}
-              className="p-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">
+            <button onClick={() => shiftWeek(1)} className="p-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Week label */}
           <div className="text-sm font-medium text-gray-700 bg-green-50 px-3 py-1.5 rounded-lg">
             {weekLabel}
             {location && (
@@ -304,7 +349,6 @@ export default function PlannedOrdersPage() {
             )}
           </div>
 
-          {/* Summer toggle (LC only) */}
           {isLC && (
             <button
               onClick={toggleSummer}
@@ -322,6 +366,21 @@ export default function PlannedOrdersPage() {
           )}
         </div>
       </Card>
+
+      {/* AI forecast note */}
+      {showNote && aiNote && (
+        <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-start gap-3">
+          <Sparkles className="w-4 h-4 text-purple-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-semibold text-purple-700 mb-1">AI Forecast Reasoning</div>
+            <p className="text-sm text-purple-800 leading-relaxed">{aiNote}</p>
+            <p className="text-xs text-purple-500 mt-1">Review numbers above, edit any if needed, then click Save.</p>
+          </div>
+          <button onClick={() => setShowNote(false)} className="text-purple-400 hover:text-purple-600 flex-shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Orders table */}
       {loading ? (
@@ -358,8 +417,7 @@ export default function PlannedOrdersPage() {
                       {visibleDays.map(day => (
                         <td key={day} className="px-2 py-2 text-center">
                           <input
-                            type="number"
-                            min="0"
+                            type="number" min="0"
                             value={row[day] || ''}
                             placeholder="0"
                             onChange={e => updateCell(item.id, day, e.target.value)}
@@ -396,7 +454,6 @@ export default function PlannedOrdersPage() {
         </Card>
       )}
 
-      {/* Operating days legend */}
       {location && (
         <div className="flex items-center gap-3 text-xs text-gray-400">
           <span>Operating days this week:</span>
@@ -405,9 +462,7 @@ export default function PlannedOrdersPage() {
               operatingDays.includes(key)
                 ? 'bg-green-100 text-green-700 font-medium'
                 : 'bg-gray-100 text-gray-400 line-through'
-            }`}>
-              {label}
-            </span>
+            }`}>{label}</span>
           ))}
         </div>
       )}
