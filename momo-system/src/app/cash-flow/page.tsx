@@ -91,12 +91,62 @@ function Section({ label, amount, isIncome, children, defaultOpen = false }: {
   )
 }
 
-// ─── Subcategory row ──────────────────────────────────────────────────────────
-function SubRow({ label, amount, count }: { label: string; amount: number; count: number }) {
+// ─── Subcategory row (expandable to individual transactions) ──────────────────
+function SubRow({ label, amount, count, transactions }: {
+  label: string
+  amount: number
+  count: number
+  transactions?: Transaction[]
+}) {
+  const [open, setOpen] = useState(false)
+  const hasDetail = transactions && transactions.length > 0
+
   return (
-    <div className="flex items-center justify-between px-6 py-2 hover:bg-gray-50">
-      <span className="text-sm text-gray-600">{label} <span className="text-xs text-gray-400">({count})</span></span>
-      <span className="text-sm font-medium text-gray-800">{fmt$(amount)}</span>
+    <div>
+      {/* Summary row */}
+      <div
+        className={`flex items-center justify-between px-6 py-2 hover:bg-gray-50 transition-colors ${hasDetail ? 'cursor-pointer select-none' : ''}`}
+        onClick={() => hasDetail && setOpen(o => !o)}
+      >
+        <div className="flex items-center gap-1.5">
+          {hasDetail ? (
+            open
+              ? <ChevronDown className="w-3 h-3 text-gray-400 shrink-0" />
+              : <ChevronRight className="w-3 h-3 text-gray-400 shrink-0" />
+          ) : (
+            <span className="w-3 shrink-0" />
+          )}
+          <span className="text-sm text-gray-600">
+            {label} <span className="text-xs text-gray-400">({count})</span>
+          </span>
+        </div>
+        <span className="text-sm font-medium text-gray-800">{fmt$(amount)}</span>
+      </div>
+
+      {/* Individual transactions */}
+      {open && hasDetail && (
+        <div className="bg-gray-50/70 border-t border-gray-100">
+          {transactions
+            .slice()
+            .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date))
+            .map(tx => {
+              const amt = Number(tx.credit_amount) > 0 ? Number(tx.credit_amount) : Number(tx.debit_amount)
+              const memo = tx.memo || tx.description
+              return (
+                <div
+                  key={tx.id}
+                  className="flex items-center justify-between pl-12 pr-6 py-1.5 border-b border-gray-100 last:border-0 hover:bg-gray-100/60 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xs text-gray-400 whitespace-nowrap shrink-0">{tx.transaction_date}</span>
+                    <span className="text-xs text-gray-500 truncate">{memo}</span>
+                  </div>
+                  <span className="text-xs font-medium text-gray-700 whitespace-nowrap ml-4">{fmt$(amt)}</span>
+                </div>
+              )
+            })}
+        </div>
+      )}
     </div>
   )
 }
@@ -192,12 +242,24 @@ export default function CashFlowPage() {
   const businessTx = transactions.filter(t => !t.is_personal)
   const personalTx = transactions.filter(t => t.is_personal)
 
-  // Cash In
-  const revenueTx    = businessTx.filter(t => t.category === 'Revenue' || t.category === 'Other Income')
-  const totalCashIn  = revenueTx.reduce((s, t) => s + Number(t.credit_amount), 0)
+  // Cash In — grouped by subcategory, keeping individual transactions
+  const revenueTx = businessTx.filter(t => t.category === 'Revenue' || t.category === 'Other Income')
+  const totalCashIn = revenueTx.reduce((s, t) => s + Number(t.credit_amount), 0)
 
-  // Cash Out by category
-  const outByCategory: Record<string, { total: number; bySub: Record<string, { total: number; count: number }> }> = {}
+  const revenueBySubMap = revenueTx.reduce((acc, t) => {
+    const sub = t.subcategory || t.description
+    if (!acc[sub]) acc[sub] = { total: 0, count: 0, txs: [] as Transaction[] }
+    acc[sub].total += Number(t.credit_amount)
+    acc[sub].count += 1
+    acc[sub].txs.push(t)
+    return acc
+  }, {} as Record<string, { total: number; count: number; txs: Transaction[] }>)
+
+  // Cash Out by category — grouped by subcategory, keeping individual transactions
+  const outByCategory: Record<string, {
+    total: number
+    bySub: Record<string, { total: number; count: number; txs: Transaction[] }>
+  }> = {}
   for (const cat of OPERATING_OUT_CATS) outByCategory[cat] = { total: 0, bySub: {} }
 
   for (const t of businessTx) {
@@ -206,14 +268,25 @@ export default function CashFlowPage() {
     const amt = Number(t.debit_amount)
     outByCategory[t.category].total += amt
     const sub = t.subcategory || 'Other'
-    if (!outByCategory[t.category].bySub[sub]) outByCategory[t.category].bySub[sub] = { total: 0, count: 0 }
+    if (!outByCategory[t.category].bySub[sub]) outByCategory[t.category].bySub[sub] = { total: 0, count: 0, txs: [] }
     outByCategory[t.category].bySub[sub].total += amt
     outByCategory[t.category].bySub[sub].count += 1
+    outByCategory[t.category].bySub[sub].txs.push(t)
   }
 
   const totalCashOut = Object.values(outByCategory).reduce((s, c) => s + c.total, 0)
   const netCashFlow  = totalCashIn - totalCashOut
   const personalTotal = personalTx.reduce((s, t) => s + Number(t.debit_amount), 0)
+
+  // Personal — grouped by subcategory, keeping individual transactions
+  const personalBySubMap = personalTx.reduce((acc, t) => {
+    const sub = t.subcategory || 'Other'
+    if (!acc[sub]) acc[sub] = { total: 0, count: 0, txs: [] as Transaction[] }
+    acc[sub].total += Number(t.debit_amount)
+    acc[sub].count += 1
+    acc[sub].txs.push(t)
+    return acc
+  }, {} as Record<string, { total: number; count: number; txs: Transaction[] }>)
 
   const uncatTx = businessTx.filter(t => t.category === 'Uncategorized')
 
@@ -366,26 +439,20 @@ export default function CashFlowPage() {
             <div className="space-y-2">
               {/* Cash In */}
               <Section label="Cash In — Square Revenue" amount={totalCashIn} isIncome defaultOpen>
-                {Object.entries(
-                  revenueTx.reduce((acc, t) => {
-                    const sub = t.subcategory || t.description
-                    if (!acc[sub]) acc[sub] = { total: 0, count: 0 }
-                    acc[sub].total += Number(t.credit_amount)
-                    acc[sub].count += 1
-                    return acc
-                  }, {} as Record<string, { total: number; count: number }>)
-                ).sort((a, b) => b[1].total - a[1].total).map(([sub, { total, count }]) => (
-                  <SubRow key={sub} label={sub} amount={total} count={count} />
-                ))}
+                {Object.entries(revenueBySubMap)
+                  .sort((a, b) => b[1].total - a[1].total)
+                  .map(([sub, { total, count, txs }]) => (
+                    <SubRow key={sub} label={sub} amount={total} count={count} transactions={txs} />
+                  ))}
               </Section>
 
               {/* Cash Out by category */}
               {OPERATING_OUT_CATS.filter(cat => outByCategory[cat]?.total > 0).map(cat => (
-                <Section key={cat} label={`${cat}`} amount={outByCategory[cat].total}>
+                <Section key={cat} label={cat} amount={outByCategory[cat].total}>
                   {Object.entries(outByCategory[cat].bySub)
                     .sort((a, b) => b[1].total - a[1].total)
-                    .map(([sub, { total, count }]) => (
-                      <SubRow key={sub} label={sub} amount={total} count={count} />
+                    .map(([sub, { total, count, txs }]) => (
+                      <SubRow key={sub} label={sub} amount={total} count={count} transactions={txs} />
                     ))}
                 </Section>
               ))}
@@ -408,17 +475,11 @@ export default function CashFlowPage() {
                 Personal Expenses <span className="text-xs font-normal text-gray-400">(excluded from business cash flow)</span>
               </h3>
               <div className="space-y-1">
-                {Object.entries(
-                  personalTx.reduce((acc, t) => {
-                    const sub = t.subcategory || 'Other'
-                    if (!acc[sub]) acc[sub] = { total: 0, count: 0 }
-                    acc[sub].total += Number(t.debit_amount)
-                    acc[sub].count += 1
-                    return acc
-                  }, {} as Record<string, { total: number; count: number }>)
-                ).sort((a, b) => b[1].total - a[1].total).map(([sub, { total, count }]) => (
-                  <SubRow key={sub} label={sub} amount={total} count={count} />
-                ))}
+                {Object.entries(personalBySubMap)
+                  .sort((a, b) => b[1].total - a[1].total)
+                  .map(([sub, { total, count, txs }]) => (
+                    <SubRow key={sub} label={sub} amount={total} count={count} transactions={txs} />
+                  ))}
                 <div className="flex justify-between items-center px-4 py-2 bg-amber-50 rounded-lg text-sm font-bold text-amber-800 mt-1">
                   <span>Total Personal</span>
                   <span>{fmt$(personalTotal)}</span>
