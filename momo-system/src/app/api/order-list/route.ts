@@ -71,10 +71,6 @@ export async function GET(req: NextRequest) {
   const needs = calcIngredientNeeds(orders, cfg, recipeMap)
 
   // ── Summer Ramp Up ───────────────────────────────────────────────────────────
-  // When ON: BATCH_FM ingredients (dough + filling) are topped up to always
-  // reflect 4,400 momos (10 batches) regardless of forecast.
-  // Everything else — achar, jhol, chilli sauce, chowmein — stays at forecast.
-  // Toggle via SUMMER_RAMP_UP in config table (0 = off, 1 = on).
   const summerRampUp    = Number(cfg['SUMMER_RAMP_UP'] ?? 0) === 1
   const forecastMomos   = (orders.REG + orders.FRI + orders.CHI + orders.JHO) * MOMOS_PER_PLATE
   const forecastBatches = forecastMomos / PIECES_PER_BATCH
@@ -141,5 +137,36 @@ export async function GET(req: NextRequest) {
   }
 
   const lines = calcOrderLines(needs, inventoryMap, meta)
-  return NextResponse.json({ lines, ingredients: ingData, orders, summerRampUp })
+
+  // ── Package pricing: pull current_unit_cost for any non-ingredient codes ────
+  // Covers ST-packages, fixed-stock items (BOUL, COIL, SALT, etc.), and any
+  // other package that appears on the order list but not in ingredients.
+  const ingCodes = new Set((ingData || []).map((i: any) => i.code))
+  const packageCodesOnList = lines
+    .map((l: any) => l.code)
+    .filter((code: string) => !ingCodes.has(code))
+
+  let packagePrices: Record<string, { id: string; name: string; current_unit_cost: number | null }> = {}
+  if (packageCodesOnList.length > 0) {
+    const { data: pkgData } = await sb
+      .from('packages')
+      .select('id, code, name, current_unit_cost')
+      .in('code', packageCodesOnList)
+
+    for (const p of pkgData || []) {
+      packagePrices[p.code] = {
+        id: p.id,
+        name: p.name,
+        current_unit_cost: p.current_unit_cost != null ? Number(p.current_unit_cost) : null,
+      }
+    }
+  }
+
+  return NextResponse.json({
+    lines,
+    ingredients: ingData,
+    packagePrices,       // { [code]: { id, name, current_unit_cost } }
+    orders,
+    summerRampUp,
+  })
 }
