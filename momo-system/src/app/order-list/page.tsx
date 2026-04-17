@@ -1,11 +1,11 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import { ShoppingCart, Save, RotateCcw, Lock, CheckCircle, AlertTriangle, Minus, ChevronDown, ChevronRight, ShoppingBag } from 'lucide-react'
+import { ShoppingCart, Save, RotateCcw, Lock, CheckCircle, AlertTriangle, Minus, ChevronDown, ChevronRight, ShoppingBag, Pencil } from 'lucide-react'
 
 function snapToWednesday(): string {
   const d = new Date()
@@ -22,7 +22,6 @@ type ShopStatus = 'full' | 'partial' | null
 const NEWPORT_BUFFER = 1.5
 
 // Perishable ingredients — ordered exact (no buffer) because short shelf life
-// Corresponds to: Bone-in Chicken, Roma Tomatoes, Cilantro
 const PERISHABLE_CODES = new Set(['CHK-BI', 'TOM', 'CIL'])
 
 // Logical shopping order
@@ -43,6 +42,9 @@ function saveShopStatus(weekStart: string, status: Record<string, ShopStatus>) {
   localStorage.setItem(SHOP_STATUS_KEY(weekStart), JSON.stringify(status))
 }
 
+const formatMoney = (n: number) =>
+  `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
 export default function OrderListPage() {
   const [weekStart, setWeekStart]   = useState<string>(snapToWednesday)
   const [data, setData]             = useState<any>(null)
@@ -58,9 +60,26 @@ export default function OrderListPage() {
   const [expanded, setExpanded]     = useState<Record<string,boolean>>({})
   const [shopStatus, setShopStatus] = useState<Record<string, ShopStatus>>({})
 
+  // ── Price editing state ──────────────────────────────────────────
+  // Which code is currently being edited (null = nothing open)
+  const [editingPrice, setEditingPrice] = useState<string | null>(null)
+  // Draft value in the input
+  const [priceDraft, setPriceDraft] = useState<string>('')
+  // Local override of prices that have been updated this session (so the UI
+  // reflects the new value immediately without waiting for a refetch)
+  const [priceOverrides, setPriceOverrides] = useState<Record<string, number | null>>({})
+  const priceInputRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     setShopStatus(loadShopStatus(weekStart))
   }, [weekStart])
+
+  useEffect(() => {
+    if (editingPrice && priceInputRef.current) {
+      priceInputRef.current.focus()
+      priceInputRef.current.select()
+    }
+  }, [editingPrice])
 
   const setItemStatus = (code: string, status: ShopStatus) => {
     const next = { ...shopStatus, [code]: status }
@@ -84,6 +103,8 @@ export default function OrderListPage() {
         } else oh[ing.code] = 0
       }
       setOnHand(oh)
+      // Clear overrides since DB now reflects them
+      setPriceOverrides({})
     } finally { setLoading(false) }
   }, [weekStart])
 
@@ -208,6 +229,31 @@ export default function OrderListPage() {
     toast.success('Notes saved')
   }
 
+  // ── Save price for a single item (inline edit) ──────────────────
+  const savePriceFor = async (code: string, rawValue: string) => {
+    const trimmed = rawValue.trim()
+    const value: number | null = trimmed === '' ? null : Number(trimmed)
+    if (value !== null && (isNaN(value) || value < 0)) {
+      toast.error('Enter a valid non-negative number')
+      return
+    }
+    try {
+      const res = await fetch('/api/unit-price', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, current_unit_cost: value }),
+      })
+      const json = await res.json()
+      if (!res.ok) { toast.error(json.error || 'Save failed'); return }
+      setPriceOverrides(prev => ({ ...prev, [code]: value }))
+      setEditingPrice(null)
+      setPriceDraft('')
+      toast.success(`Price updated for ${code}`)
+    } catch (e: any) {
+      toast.error(e?.message || 'Save failed')
+    }
+  }
+
   // ── calcUnitsToBuy: applies 50% buffer for Newport on non-perishable items ──
   const calcUnitsToBuy = (line: any, meta: Record<string, any>) => {
     const needed        = Number(line.needed) || 0
@@ -226,6 +272,28 @@ export default function OrderListPage() {
   const ingMeta = (data?.ingredients || []).reduce((acc: any, ing: any) => {
     acc[ing.code] = ing; return acc
   }, {})
+  const packagePrices = data?.packagePrices || {}
+
+  // ── Pricing helpers ─────────────────────────────────────────────
+  // Unified lookup: session override → ingredient cost → package cost → null
+  const getUnitPrice = (code: string): number | null => {
+    if (code in priceOverrides) return priceOverrides[code]
+    const ingCost = ingMeta[code]?.current_unit_cost
+    if (ingCost != null && !isNaN(Number(ingCost))) return Number(ingCost)
+    const pkgCost = packagePrices[code]?.current_unit_cost
+    if (pkgCost != null && !isNaN(Number(pkgCost))) return Number(pkgCost)
+    return null
+  }
+
+  const getDisplayName = (code: string): string =>
+    ingMeta[code]?.name || packagePrices[code]?.name || code
+
+  const calcLineCost = (line: any): number | null => {
+    const units = calcUnitsToBuy(line, ingMeta)
+    if (units === 0) return 0
+    const price = getUnitPrice(line.code)
+    return price != null ? units * price : null
+  }
 
   const grouped = lines.reduce((acc: Record<string,any[]>, line: any) => {
     const cat = ingMeta[line.code]?.category || 'Other'
@@ -252,6 +320,13 @@ export default function OrderListPage() {
 
   const doneCount    = toBuyLines.filter((l: any) => shopStatus[l.code] === 'full').length
   const partialCount = toBuyLines.filter((l: any) => shopStatus[l.code] === 'partial').length
+
+  // ── Pricing totals ─────────────────────────────────────────────
+  const grandTotal = toBuyLines.reduce((sum: number, l: any) => {
+    const cost = calcLineCost(l)
+    return sum + (cost || 0)
+  }, 0)
+  const missingPriceCount = toBuyLines.filter((l: any) => getUnitPrice(l.code) == null).length
 
   const wedDate  = new Date(weekStart + 'T12:00:00')
   const sunDate  = new Date(wedDate); sunDate.setDate(wedDate.getDate() + 7)
@@ -291,6 +366,63 @@ export default function OrderListPage() {
     if (s === 'full')    return 'bg-green-50'
     if (s === 'partial') return 'bg-amber-50'
     return 'bg-red-50'
+  }
+
+  // ── Inline price editor component ──────────────────────────────
+  const renderPriceBlock = (line: any, unitsToBuy: number) => {
+    const unitPrice = getUnitPrice(line.code)
+    const lineCost  = calcLineCost(line)
+    const isEditing = editingPrice === line.code
+
+    if (isEditing) {
+      return (
+        <div className="text-xs mt-1 flex items-center gap-1 justify-end">
+          <span className="text-gray-400">$</span>
+          <input
+            ref={priceInputRef}
+            type="number"
+            min="0"
+            step="0.01"
+            inputMode="decimal"
+            value={priceDraft}
+            onChange={e => setPriceDraft(e.target.value)}
+            onBlur={() => savePriceFor(line.code, priceDraft)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') savePriceFor(line.code, priceDraft)
+              else if (e.key === 'Escape') { setEditingPrice(null); setPriceDraft('') }
+            }}
+            placeholder="0.00"
+            className="w-20 text-right text-xs border border-brand-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-brand-400"
+          />
+        </div>
+      )
+    }
+
+    if (unitPrice != null) {
+      return (
+        <button
+          onClick={() => { setEditingPrice(line.code); setPriceDraft(String(unitPrice)) }}
+          className="text-xs mt-1 text-gray-600 hover:text-brand-700 group flex items-center gap-1 justify-end w-full"
+          title="Click to edit price"
+        >
+          <span className="text-gray-400">@ {formatMoney(unitPrice)} = </span>
+          <span className="font-semibold text-gray-800">{formatMoney(lineCost || 0)}</span>
+          <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-60" />
+        </button>
+      )
+    }
+
+    // No price — click to add
+    return (
+      <button
+        onClick={() => { setEditingPrice(line.code); setPriceDraft('') }}
+        className="text-xs mt-1 flex items-center gap-1 justify-end text-amber-600 font-medium hover:text-amber-800 w-full"
+        title="Click to add price"
+      >
+        <AlertTriangle className="w-3 h-3" />
+        Add price
+      </button>
+    )
   }
 
   return (
@@ -408,18 +540,56 @@ export default function OrderListPage() {
               </div>
             )}
 
+            {/* Expected cost summary */}
+            {totalToBuy > 0 && (
+              <div className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <ShoppingCart className="w-4 h-4 text-gray-500" />
+                    <span className="text-sm font-medium text-gray-700">Expected total cost</span>
+                    <a href="/admin/prices"
+                      className="text-xs text-brand-600 hover:text-brand-800 underline ml-2">
+                      Manage prices
+                    </a>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xl font-bold text-brand-700">{formatMoney(grandTotal)}</div>
+                    {missingPriceCount > 0 && (
+                      <div className="text-xs text-amber-600 mt-0.5 flex items-center gap-1 justify-end">
+                        <AlertTriangle className="w-3 h-3" />
+                        {missingPriceCount} item{missingPriceCount > 1 ? 's' : ''} missing price — click any row to add
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Buffer info banner */}
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 text-xs text-blue-700 flex items-center gap-2">
               <span className="font-semibold">Newport buffer active:</span>
               Non-perishable items are ordered 50% above need. Perishables (Bone-in Chicken, Tomatoes, Cilantro) are ordered exact.
             </div>
 
-            {sortedGroupEntries.map(([category, catLines]) => (
+            {sortedGroupEntries.map(([category, catLines]) => {
+              const catToOrder  = catLines.filter(l => calcUnitsToBuy(l, ingMeta) > 0)
+              const catSubtotal = catToOrder.reduce((s: number, l: any) => s + (calcLineCost(l) || 0), 0)
+              const catMissing  = catToOrder.filter(l => getUnitPrice(l.code) == null).length
+
+              return (
               <Card key={category} className="p-0 overflow-hidden">
-                <div className="px-4 py-2.5 bg-brand-900 text-white font-semibold text-sm flex justify-between">
+                <div className="px-4 py-2.5 bg-brand-900 text-white font-semibold text-sm flex justify-between items-center">
                   <span>{category}</span>
-                  <span className="text-brand-300 text-xs">
-                    {catLines.filter(l => calcUnitsToBuy(l, ingMeta) > 0).length} to order
+                  <span className="text-brand-300 text-xs flex items-center gap-3">
+                    <span>{catToOrder.length} to order</span>
+                    {catToOrder.length > 0 && (
+                      <span className="text-white">
+                        {formatMoney(catSubtotal)}
+                        {catMissing > 0 && (
+                          <span className="text-amber-300 ml-1" title={`${catMissing} item(s) missing price`}>*</span>
+                        )}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div className="divide-y divide-gray-100">
@@ -432,21 +602,22 @@ export default function OrderListPage() {
                     const isPerishable = PERISHABLE_CODES.has(line.code)
                     const unitsToBuy   = calcUnitsToBuy(line, ingMeta)
                     const status       = shopStatus[line.code]
+                    const displayName  = getDisplayName(line.code)
 
                     return (
                       <div key={line.code} className={`px-4 py-3 transition-colors ${rowBg(line.code, unitsToBuy)}`}>
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-gray-800 truncate">{ing?.name || line.code}</div>
+                            <div className="text-sm font-medium text-gray-800 truncate">{displayName}</div>
                             <div className="text-xs text-gray-400">
-                              {line.code} · needed: {needed.toFixed(1)} {ing?.recipe_unit}
+                              {line.code} · needed: {needed.toFixed(1)} {ing?.recipe_unit || ''}
                               {isPerishable && (
                                 <span className="ml-2 text-orange-500 font-medium">· exact (perishable)</span>
                               )}
                             </div>
                           </div>
                           {unitsToBuy > 0 && (
-                            <div className="flex-shrink-0 text-right">
+                            <div className="flex-shrink-0 text-right min-w-[140px]">
                               <span className="text-sm font-bold text-white bg-brand-600 px-3 py-1 rounded-full">
                                 Buy {unitsToBuy}
                               </span>
@@ -456,6 +627,7 @@ export default function OrderListPage() {
                               {ing?.vendor_unit_desc && (
                                 <div className="text-xs text-gray-400 mt-0.5">{ing.vendor_unit_desc}</div>
                               )}
+                              {renderPriceBlock(line, unitsToBuy)}
                             </div>
                           )}
                         </div>
@@ -505,7 +677,8 @@ export default function OrderListPage() {
                   })}
                 </div>
               </Card>
-            ))}
+              )
+            })}
 
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
               <strong>Ready to order?</strong> Click <strong>Lock Order</strong> above to record what the system recommended.
