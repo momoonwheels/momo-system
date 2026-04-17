@@ -4,18 +4,20 @@ import toast from 'react-hot-toast'
 import PageHeader from '@/components/ui/PageHeader'
 import Card from '@/components/ui/Card'
 import LoadingSpinner from '@/components/ui/LoadingSpinner'
-import { Search, CheckCircle, AlertTriangle } from 'lucide-react'
+import { Search, CheckCircle, AlertTriangle, Receipt, Pencil } from 'lucide-react'
 
 type PriceRow = {
   id: string
   code: string
   name: string
-  kind: 'ingredient' | 'package'
   category?: string
   vendor_unit_desc?: string
-  size_qty?: number
-  size_unit?: string
-  current_unit_cost: number | null
+  effective_price: number | null
+  effective_source: 'receipt' | 'manual' | null
+  receipt_price: number | null
+  receipt_date: string | null
+  receipt_vendor: string | null
+  manual_price: number | null
   sort_order?: number
 }
 
@@ -27,7 +29,7 @@ export default function PricesAdminPage() {
   const [loading, setLoading] = useState(true)
   const [savingCode, setSavingCode] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [filter, setFilter] = useState<'all' | 'missing' | 'ingredients' | 'packages'>('missing')
+  const [filter, setFilter] = useState<'all' | 'missing' | 'receipt' | 'manual'>('missing')
   const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
@@ -35,29 +37,7 @@ export default function PricesAdminPage() {
     try {
       const res = await fetch('/api/unit-price', { cache: 'no-store' })
       const json = await res.json()
-      const combined: PriceRow[] = [
-        ...(json.ingredients || []).map((i: any) => ({
-          id:                i.id,
-          code:              i.code,
-          name:              i.name,
-          kind:              'ingredient' as const,
-          category:          i.category,
-          vendor_unit_desc:  i.vendor_unit_desc,
-          current_unit_cost: i.current_unit_cost != null ? Number(i.current_unit_cost) : null,
-          sort_order:        i.sort_order,
-        })),
-        ...(json.packages || []).map((p: any) => ({
-          id:                p.id,
-          code:              p.code,
-          name:              p.name,
-          kind:              'package' as const,
-          size_qty:          p.size_qty,
-          size_unit:         p.size_unit,
-          current_unit_cost: p.current_unit_cost != null ? Number(p.current_unit_cost) : null,
-          sort_order:        p.sort_order,
-        })),
-      ]
-      setRows(combined)
+      setRows(json.ingredients || [])
     } finally {
       setLoading(false)
     }
@@ -66,7 +46,7 @@ export default function PricesAdminPage() {
   useEffect(() => { load() }, [load])
 
   const savePrice = async (row: PriceRow) => {
-    const raw = drafts[row.code] ?? (row.current_unit_cost != null ? String(row.current_unit_cost) : '')
+    const raw = drafts[row.code] ?? (row.manual_price != null ? String(row.manual_price) : '')
     const trimmed = raw.trim()
     const value: number | null = trimmed === '' ? null : Number(trimmed)
     if (value !== null && (isNaN(value) || value < 0)) {
@@ -82,7 +62,17 @@ export default function PricesAdminPage() {
       })
       const json = await res.json()
       if (!res.ok) { toast.error(json.error || 'Save failed'); return }
-      setRows(prev => prev.map(r => r.code === row.code ? { ...r, current_unit_cost: value } : r))
+      // Update local row: manual_price changes, effective_price updates if there's no receipt
+      setRows(prev => prev.map(r => {
+        if (r.code !== row.code) return r
+        const updated = { ...r, manual_price: value }
+        // Receipts still win. If no receipt, effective becomes manual.
+        if (r.receipt_price == null) {
+          updated.effective_price = value && value > 0 ? value : null
+          updated.effective_source = value && value > 0 ? 'manual' : null
+        }
+        return updated
+      }))
       setDrafts(prev => {
         const next = { ...prev }
         delete next[row.code]
@@ -98,9 +88,9 @@ export default function PricesAdminPage() {
 
   const filtered = useMemo(() => {
     let out = rows
-    if (filter === 'missing')     out = out.filter(r => r.current_unit_cost == null)
-    if (filter === 'ingredients') out = out.filter(r => r.kind === 'ingredient')
-    if (filter === 'packages')    out = out.filter(r => r.kind === 'package')
+    if (filter === 'missing') out = out.filter(r => r.effective_price == null)
+    if (filter === 'receipt') out = out.filter(r => r.effective_source === 'receipt')
+    if (filter === 'manual')  out = out.filter(r => r.effective_source === 'manual')
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       out = out.filter(r =>
@@ -112,47 +102,61 @@ export default function PricesAdminPage() {
     return out
   }, [rows, filter, search])
 
-  const missingCount = rows.filter(r => r.current_unit_cost == null).length
-  const totalCount = rows.length
+  const missingCount  = rows.filter(r => r.effective_price == null).length
+  const receiptCount  = rows.filter(r => r.effective_source === 'receipt').length
+  const manualCount   = rows.filter(r => r.effective_source === 'manual').length
+  const totalCount    = rows.length
 
   return (
     <div className="p-4 lg:p-8">
       <PageHeader
         title="Prices"
-        sub="Unit prices for all ingredients and packages"
+        sub="Ingredient unit prices — auto-pulled from receipts, with manual fallback"
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
         <Card className="flex items-center gap-3">
-          <CheckCircle className="w-5 h-5 text-green-500" />
+          <Receipt className="w-5 h-5 text-green-500" />
           <div>
-            <div className="text-xs text-gray-500">Priced</div>
-            <div className="text-lg font-bold text-gray-800">{totalCount - missingCount} / {totalCount}</div>
+            <div className="text-xs text-gray-500">From receipts</div>
+            <div className="text-lg font-bold text-gray-800">{receiptCount}</div>
           </div>
         </Card>
         <Card className="flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-500" />
+          <Pencil className="w-5 h-5 text-amber-500" />
           <div>
-            <div className="text-xs text-gray-500">Missing price</div>
+            <div className="text-xs text-gray-500">Manual entry</div>
+            <div className="text-lg font-bold text-gray-800">{manualCount}</div>
+          </div>
+        </Card>
+        <Card className="flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-500" />
+          <div>
+            <div className="text-xs text-gray-500">Missing</div>
             <div className="text-lg font-bold text-gray-800">{missingCount}</div>
           </div>
         </Card>
-        <Card>
-          <div className="text-xs text-gray-500 mb-1">Tip</div>
-          <div className="text-xs text-gray-600">
-            Prices are used on the Order List to estimate expected cost. Receipts will overwrite manual entries on next reconciliation.
+        <Card className="flex items-center gap-3">
+          <CheckCircle className="w-5 h-5 text-brand-600" />
+          <div>
+            <div className="text-xs text-gray-500">Total</div>
+            <div className="text-lg font-bold text-gray-800">{totalCount}</div>
           </div>
         </Card>
       </div>
+
+      <Card className="mb-4 text-xs text-gray-600">
+        <strong className="text-gray-800">How this works:</strong> Prices are pulled from the latest matched receipt line for each ingredient. When no receipt exists yet, you can enter a manual price here — it'll be used until a receipt for that item is uploaded and reconciled. <strong>Receipts always override manual entries.</strong>
+      </Card>
 
       <Card className="mb-4">
         <div className="flex flex-wrap gap-3 items-center">
           <div className="flex gap-1 bg-gray-50 rounded-lg p-1">
             {([
-              ['missing',     `Missing (${missingCount})`],
-              ['all',         `All (${totalCount})`],
-              ['ingredients', 'Ingredients'],
-              ['packages',    'Packages'],
+              ['missing', `Missing (${missingCount})`],
+              ['all',     `All (${totalCount})`],
+              ['receipt', `From receipts (${receiptCount})`],
+              ['manual',  `Manual (${manualCount})`],
             ] as const).map(([key, label]) => (
               <button
                 key={key}
@@ -190,45 +194,52 @@ export default function PricesAdminPage() {
               <tr className="bg-brand-900 text-white text-xs uppercase tracking-wider">
                 <th className="text-left px-4 py-2.5 font-semibold">Code</th>
                 <th className="text-left px-4 py-2.5 font-semibold">Name</th>
-                <th className="text-left px-4 py-2.5 font-semibold">Type</th>
+                <th className="text-left px-4 py-2.5 font-semibold">Category</th>
                 <th className="text-left px-4 py-2.5 font-semibold">Unit</th>
-                <th className="text-right px-4 py-2.5 font-semibold">Current price</th>
-                <th className="text-right px-4 py-2.5 font-semibold">New price</th>
+                <th className="text-right px-4 py-2.5 font-semibold">Effective price</th>
+                <th className="text-right px-4 py-2.5 font-semibold">Manual override</th>
                 <th className="text-right px-4 py-2.5 font-semibold"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtered.map(row => {
-                const draft      = drafts[row.code] ?? ''
-                const hasDraft   = draft.trim() !== ''
-                const isDifferent = hasDraft && Number(draft) !== row.current_unit_cost
-                const isSaving   = savingCode === row.code
+                const draft = drafts[row.code] ?? ''
+                const hasDraft = draft.trim() !== ''
+                const draftNum = hasDraft ? Number(draft) : null
+                const isDifferent = hasDraft && draftNum !== row.manual_price
+                const isSaving = savingCode === row.code
 
                 return (
-                  <tr key={`${row.kind}-${row.code}`} className="hover:bg-gray-50">
+                  <tr key={row.code} className="hover:bg-gray-50">
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-600">{row.code}</td>
                     <td className="px-4 py-2.5 text-gray-800">{row.name}</td>
                     <td className="px-4 py-2.5 text-xs">
-                      <span className={`px-2 py-0.5 rounded-full ${
-                        row.kind === 'ingredient'
-                          ? 'bg-blue-50 text-blue-700'
-                          : 'bg-purple-50 text-purple-700'
-                      }`}>
-                        {row.kind === 'ingredient' ? (row.category || 'Ingredient') : 'Package'}
+                      <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                        {row.category || '—'}
                       </span>
                     </td>
                     <td className="px-4 py-2.5 text-xs text-gray-500">
-                      {row.kind === 'ingredient'
-                        ? (row.vendor_unit_desc || '—')
-                        : (row.size_qty != null ? `${row.size_qty} ${row.size_unit || ''}`.trim() : '—')}
+                      {row.vendor_unit_desc || '—'}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      {row.current_unit_cost != null
-                        ? <span className="font-semibold text-gray-800">{formatMoney(row.current_unit_cost)}</span>
-                        : <span className="text-amber-600 flex items-center gap-1 justify-end text-xs font-medium">
-                            <AlertTriangle className="w-3 h-3" /> Not set
-                          </span>
-                      }
+                      {row.effective_price != null ? (
+                        <div className="flex items-center gap-1 justify-end">
+                          <span className="font-semibold text-gray-800">{formatMoney(row.effective_price)}</span>
+                          {row.effective_source === 'receipt' ? (
+                            <span title={`From receipt${row.receipt_date ? ' ' + row.receipt_date : ''}${row.receipt_vendor ? ' · ' + row.receipt_vendor : ''}`}>
+                              <Receipt className="w-3.5 h-3.5 text-green-500" />
+                            </span>
+                          ) : (
+                            <span title="Manual entry">
+                              <Pencil className="w-3.5 h-3.5 text-amber-500" />
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-amber-600 flex items-center gap-1 justify-end text-xs font-medium">
+                          <AlertTriangle className="w-3 h-3" /> Not set
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <div className="flex items-center gap-1 justify-end">
@@ -240,13 +251,17 @@ export default function PricesAdminPage() {
                           inputMode="decimal"
                           value={draft}
                           onChange={e => setDrafts(prev => ({ ...prev, [row.code]: e.target.value }))}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') savePrice(row)
-                          }}
-                          placeholder={row.current_unit_cost != null ? String(row.current_unit_cost) : '0.00'}
+                          onKeyDown={e => { if (e.key === 'Enter') savePrice(row) }}
+                          placeholder={row.manual_price != null ? String(row.manual_price) : '0.00'}
                           className="w-24 text-right text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-400"
                         />
                       </div>
+                      {row.receipt_price != null && (
+                        <div className="text-xs text-gray-400 mt-0.5">
+                          Receipt: {formatMoney(row.receipt_price)}
+                          {row.receipt_date && ` · ${row.receipt_date}`}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <button
