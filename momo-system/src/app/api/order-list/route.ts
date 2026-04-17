@@ -29,6 +29,63 @@ const WEEKLY_MOMO_TARGET = 4400
 const TARGET_BATCHES     = WEEKLY_MOMO_TARGET / PIECES_PER_BATCH  // 10
 const MOMOS_PER_PLATE    = 10
 
+// ── Price lookup ─────────────────────────────────────────────────────────────
+// For every ingredient, find the most recent unit_price from receipt_line_items.
+// Falls back to ingredients.current_unit_cost (cache / manual entry) if no
+// matched receipt line exists.
+//
+// Returns: { [ingredient_code]: { unit_price: number, source: 'receipt' | 'manual', last_receipt_date?: string } }
+async function buildPriceMap(
+  sb: ReturnType<typeof createServerClient>,
+  ingredients: Array<{ id: string; code: string; name: string; current_unit_cost: number | null }>
+) {
+  // Fetch all matched receipt line items, most recent first
+  const { data: rli, error } = await sb
+    .from('receipt_line_items')
+    .select('matched_ingredient_id, unit_price, created_at, receipts(receipt_date)')
+    .not('matched_ingredient_id', 'is', null)
+    .not('unit_price', 'is', null)
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    console.error('buildPriceMap: receipt_line_items query failed', error)
+  }
+
+  // Pick the first (most recent) non-null unit_price per ingredient_id
+  const latestByIngredient: Record<string, { unit_price: number; receipt_date?: string }> = {}
+  for (const row of rli || []) {
+    const ingId = row.matched_ingredient_id as string
+    if (!ingId || latestByIngredient[ingId]) continue  // already have the newest
+    const price = Number(row.unit_price)
+    if (isNaN(price) || price <= 0) continue
+    latestByIngredient[ingId] = {
+      unit_price:   price,
+      receipt_date: (row.receipts as any)?.receipt_date,
+    }
+  }
+
+  // Build final map keyed by ingredient code
+  const priceMap: Record<string, { unit_price: number; source: 'receipt' | 'manual'; last_receipt_date?: string }> = {}
+  for (const ing of ingredients) {
+    const fromReceipt = latestByIngredient[ing.id]
+    if (fromReceipt) {
+      priceMap[ing.code] = {
+        unit_price:        fromReceipt.unit_price,
+        source:            'receipt',
+        last_receipt_date: fromReceipt.receipt_date,
+      }
+    } else if (ing.current_unit_cost != null && Number(ing.current_unit_cost) > 0) {
+      // Manual fallback — user entered this on the admin page or inline
+      priceMap[ing.code] = {
+        unit_price: Number(ing.current_unit_cost),
+        source:     'manual',
+      }
+    }
+  }
+
+  return priceMap
+}
+
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
   const { searchParams } = new URL(req.url)
@@ -138,34 +195,13 @@ export async function GET(req: NextRequest) {
 
   const lines = calcOrderLines(needs, inventoryMap, meta)
 
-  // ── Package pricing: pull current_unit_cost for any non-ingredient codes ────
-  // Covers ST-packages, fixed-stock items (BOUL, COIL, SALT, etc.), and any
-  // other package that appears on the order list but not in ingredients.
-  const ingCodes = new Set((ingData || []).map((i: any) => i.code))
-  const packageCodesOnList = lines
-    .map((l: any) => l.code)
-    .filter((code: string) => !ingCodes.has(code))
-
-  let packagePrices: Record<string, { id: string; name: string; current_unit_cost: number | null }> = {}
-  if (packageCodesOnList.length > 0) {
-    const { data: pkgData } = await sb
-      .from('packages')
-      .select('id, code, name, current_unit_cost')
-      .in('code', packageCodesOnList)
-
-    for (const p of pkgData || []) {
-      packagePrices[p.code] = {
-        id: p.id,
-        name: p.name,
-        current_unit_cost: p.current_unit_cost != null ? Number(p.current_unit_cost) : null,
-      }
-    }
-  }
+  // Build the price map from receipts (+ manual fallback)
+  const priceMap = await buildPriceMap(sb, ingData || [])
 
   return NextResponse.json({
     lines,
     ingredients: ingData,
-    packagePrices,       // { [code]: { id, name, current_unit_cost } }
+    priceMap,       // { [ingredient_code]: { unit_price, source, last_receipt_date? } }
     orders,
     summerRampUp,
   })
