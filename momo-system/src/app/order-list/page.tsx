@@ -19,41 +19,34 @@ type Tab = 'order' | 'reconciliation'
 type ShopStatus = 'full' | 'partial' | null
 type PriceEntry = { unit_price: number; source: 'receipt' | 'manual'; last_receipt_date?: string }
 
-const NEWPORT_BUFFER = 1.5
-const PERISHABLE_CODES = new Set(['CHK-BI', 'TOM', 'CIL'])
 const CATEGORY_ORDER = ['Protein', 'Produce', 'Dry Goods', 'Sauce', 'Oil', 'Spice', 'Pantry', 'Supplies', 'Overhead', 'Other']
-const SHOP_STATUS_KEY = (weekStart: string) => `shop_status_${weekStart}`
-
-function loadShopStatus(weekStart: string): Record<string, ShopStatus> {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = localStorage.getItem(SHOP_STATUS_KEY(weekStart))
-    return raw ? JSON.parse(raw) : {}
-  } catch { return {} }
-}
-
-function saveShopStatus(weekStart: string, status: Record<string, ShopStatus>) {
-  if (typeof window === 'undefined') return
-  localStorage.setItem(SHOP_STATUS_KEY(weekStart), JSON.stringify(status))
-}
 
 const formatMoney = (n: number) =>
   `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 export default function OrderListPage() {
-  const [weekStart, setWeekStart]   = useState<string>(snapToWednesday)
-  const [data, setData]             = useState<any>(null)
-  const [loading, setLoading]       = useState(false)
-  const [onHand, setOnHand]         = useState<Record<string,number>>({})
-  const [saving, setSaving]         = useState(false)
-  const [locking, setLocking]       = useState(false)
-  const [tab, setTab]               = useState<Tab>('order')
-  const [recon, setRecon]           = useState<any>(null)
+  const [weekStart, setWeekStart] = useState<string>(snapToWednesday)
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
+  const [onHand, setOnHand] = useState<Record<string,number>>({})
+  const [saving, setSaving] = useState(false)
+  const [locking, setLocking] = useState(false)
+  const [tab, setTab] = useState<Tab>('order')
+  const [recon, setRecon] = useState<any>(null)
   const [reconLoading, setReconLoading] = useState(false)
-  const [notes, setNotes]           = useState<Record<string,string>>({})
+  const [notes, setNotes] = useState<Record<string,string>>({})
   const [overallNotes, setOverallNotes] = useState('')
-  const [expanded, setExpanded]     = useState<Record<string,boolean>>({})
+  const [expanded, setExpanded] = useState<Record<string,boolean>>({})
+
+  // Shop status now lives in the DB and syncs across devices
   const [shopStatus, setShopStatus] = useState<Record<string, ShopStatus>>({})
+
+  // Per-item buffer overrides — applied locally as soon as user saves so the
+  // row recalculates immediately without waiting for a full refetch.
+  const [bufferOverrides, setBufferOverrides] = useState<Record<string, number>>({})
+  const [editingBuffer, setEditingBuffer] = useState<string | null>(null)
+  const [bufferDraft, setBufferDraft] = useState<string>('')
+  const bufferInputRef = useRef<HTMLInputElement>(null)
 
   // Price editing state
   const [editingPrice, setEditingPrice] = useState<string | null>(null)
@@ -62,7 +55,6 @@ export default function OrderListPage() {
   const [priceOverrides, setPriceOverrides] = useState<Record<string, PriceEntry>>({})
   const priceInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { setShopStatus(loadShopStatus(weekStart)) }, [weekStart])
   useEffect(() => {
     if (editingPrice && priceInputRef.current) {
       priceInputRef.current.focus()
@@ -70,11 +62,51 @@ export default function OrderListPage() {
     }
   }, [editingPrice])
 
-  const setItemStatus = (code: string, status: ShopStatus) => {
-    const next = { ...shopStatus, [code]: status }
+  useEffect(() => {
+    if (editingBuffer && bufferInputRef.current) {
+      bufferInputRef.current.focus()
+      bufferInputRef.current.select()
+    }
+  }, [editingBuffer])
+
+  // ── Shop status (DB-synced) ──────────────────────────────────────────────
+  const loadShopStatus = useCallback(async (week: string) => {
+    try {
+      const res = await fetch(`/api/shop-status?week_start=${week}`, { cache: 'no-store' })
+      if (!res.ok) { setShopStatus({}); return }
+      const json = await res.json()
+      setShopStatus(json.status || {})
+    } catch {
+      setShopStatus({})
+    }
+  }, [])
+
+  useEffect(() => { loadShopStatus(weekStart) }, [weekStart, loadShopStatus])
+
+  const setItemStatus = async (code: string, status: ShopStatus) => {
+    // Optimistic update
+    const prev = shopStatus
+    const next = { ...shopStatus }
+    if (status === null) delete next[code]
+    else next[code] = status
     setShopStatus(next)
-    saveShopStatus(weekStart, next)
+    try {
+      const res = await fetch('/api/shop-status', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ week_start: weekStart, ingredient_code: code, status }),
+      })
+      if (!res.ok) {
+        setShopStatus(prev) // rollback
+        const j = await res.json().catch(() => ({}))
+        toast.error(j.error || 'Save failed — others won\'t see this')
+      }
+    } catch (e: any) {
+      setShopStatus(prev)
+      toast.error(e?.message || 'Network error')
+    }
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
     if (!weekStart) return
@@ -93,6 +125,7 @@ export default function OrderListPage() {
       }
       setOnHand(oh)
       setPriceOverrides({})
+      setBufferOverrides({})
     } finally { setLoading(false) }
   }, [weekStart])
 
@@ -158,29 +191,30 @@ export default function OrderListPage() {
     if (!confirm(`Lock this order for week of ${weekStart}?`)) return
     setLocking(true)
     try {
-      const lines   = data.lines || []
+      const lines = data.lines || []
       const ingMeta = (data.ingredients || []).reduce((acc: any, ing: any) => {
         acc[ing.code] = ing; return acc
       }, {})
       const items = lines.map((line: any) => {
-        const ing          = ingMeta[line.code] || {}
-        const conv         = Number(line.convFactor) || 1
-        const recipeQty    = Number(line.needed) || 0
+        const ing = ingMeta[line.code] || {}
+        const conv = Number(line.convFactor) || 1
+        const recipeQty = Number(line.needed) || 0
         const currentOnHand = (onHand[line.code] || 0) * conv
-        const netNeeded    = Math.max(0, recipeQty - currentOnHand)
-        const minQty       = Number(ing.min_order_qty) || 1
-        const isPerishable = PERISHABLE_CODES.has(ing.code || line.code)
-        const buffered     = isPerishable ? netNeeded : netNeeded * NEWPORT_BUFFER
-        const vendorQty    = netNeeded <= 0
+        const netNeeded = Math.max(0, recipeQty - currentOnHand)
+        const minQty = Number(ing.min_order_qty) || 1
+        const bufferPct = getBufferPct(line.code, ing)
+        const buffered = netNeeded * (1 + bufferPct / 100)
+        const vendorQty = netNeeded <= 0
           ? 0
           : Math.max(minQty, Math.ceil((buffered / conv) / minQty) * minQty)
+
         return {
-          ingredient_code:        ing.code || line.code,
-          ingredient_name:        ing.name || line.code,
-          category:               ing.category || '',
-          recipe_unit:            ing.recipe_unit || '',
-          vendor_unit_desc:       ing.vendor_unit_desc || '',
-          conv_factor:            conv,
+          ingredient_code: ing.code || line.code,
+          ingredient_name: ing.name || line.code,
+          category: ing.category || '',
+          recipe_unit: ing.recipe_unit || '',
+          vendor_unit_desc: ing.vendor_unit_desc || '',
+          conv_factor: conv,
           recommended_recipe_qty: recipeQty,
           recommended_vendor_qty: vendorQty,
         }
@@ -246,24 +280,59 @@ export default function OrderListPage() {
     }
   }
 
-  // calcUnitsToBuy: applies 50% buffer for Newport on non-perishable items
+  // Save per-item buffer% (inline edit)
+  const saveBufferFor = async (code: string, rawValue: string) => {
+    const trimmed = rawValue.trim()
+    if (trimmed === '') { setEditingBuffer(null); setBufferDraft(''); return }
+    const value = Number(trimmed)
+    if (isNaN(value) || value < 0 || value > 1000) {
+      toast.error('Enter a number between 0 and 1000')
+      return
+    }
+    try {
+      const res = await fetch('/api/ingredient-buffer', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, buffer_pct: value }),
+      })
+      const json = await res.json()
+      if (!res.ok) { toast.error(json.error || 'Save failed'); return }
+      setBufferOverrides(prev => ({ ...prev, [code]: value }))
+      setEditingBuffer(null)
+      setBufferDraft('')
+      toast.success(`Buffer set to ${value}% for ${code}`)
+    } catch (e: any) {
+      toast.error(e?.message || 'Save failed')
+    }
+  }
+
+  // Per-item buffer lookup: local override → server value from ingredients table → 0 fallback
+  const getBufferPct = (code: string, ing?: any): number => {
+    if (bufferOverrides[code] != null) return bufferOverrides[code]
+    const fromServer = ing?.buffer_pct
+    if (fromServer != null) return Number(fromServer)
+    return 0
+  }
+
+  // calcUnitsToBuy: applies per-item buffer (replaces old global Newport buffer)
   const calcUnitsToBuy = (line: any, meta: Record<string, any>) => {
-    const needed        = Number(line.needed) || 0
-    const conv          = Number(line.convFactor) || 1
-    const minQty        = Number(line.minOrderQty) || 1
+    const needed = Number(line.needed) || 0
+    const conv = Number(line.convFactor) || 1
+    const minQty = Number(line.minOrderQty) || 1
     const currentOnHand = (onHand[line.code] || 0) * conv
-    const netNeeded     = Math.max(0, needed - currentOnHand)
+    const netNeeded = Math.max(0, needed - currentOnHand)
     if (netNeeded <= 0) return 0
-    const isPerishable  = PERISHABLE_CODES.has(line.code)
-    const buffered      = isPerishable ? netNeeded : netNeeded * NEWPORT_BUFFER
-    const rawUnits      = conv > 0 ? buffered / conv : 0
+    const bufferPct = getBufferPct(line.code, meta[line.code])
+    const buffered = netNeeded * (1 + bufferPct / 100)
+    const rawUnits = conv > 0 ? buffered / conv : 0
     return Math.max(minQty, Math.ceil(rawUnits / minQty) * minQty)
   }
 
-  const lines   = data?.lines || []
+  const lines = data?.lines || []
   const ingMeta = (data?.ingredients || []).reduce((acc: any, ing: any) => {
     acc[ing.code] = ing; return acc
   }, {})
+
   const priceMap: Record<string, PriceEntry> = data?.priceMap || {}
 
   // Unified lookup: session override → receipts/manual from server
@@ -303,20 +372,18 @@ export default function OrderListPage() {
       )
     ])
 
-  const totalToBuy   = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0).length
-  const toBuyLines   = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0)
-
-  const doneCount    = toBuyLines.filter((l: any) => shopStatus[l.code] === 'full').length
+  const totalToBuy = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0).length
+  const toBuyLines = lines.filter((l: any) => calcUnitsToBuy(l, ingMeta) > 0)
+  const doneCount = toBuyLines.filter((l: any) => shopStatus[l.code] === 'full').length
   const partialCount = toBuyLines.filter((l: any) => shopStatus[l.code] === 'partial').length
-
   const grandTotal = toBuyLines.reduce((sum: number, l: any) => {
     const cost = calcLineCost(l)
     return sum + (cost || 0)
   }, 0)
   const missingPriceCount = toBuyLines.filter((l: any) => getUnitPrice(l.code) == null).length
 
-  const wedDate  = new Date(weekStart + 'T12:00:00')
-  const sunDate  = new Date(wedDate); sunDate.setDate(wedDate.getDate() + 7)
+  const wedDate = new Date(weekStart + 'T12:00:00')
+  const sunDate = new Date(wedDate); sunDate.setDate(wedDate.getDate() + 7)
   const weekLabel = `${format(wedDate, 'MMM d')} – ${format(sunDate, 'MMM d, yyyy')}`
 
   const getVarianceStatus = (recQty: number, actQty: number, conv: number) => {
@@ -325,41 +392,41 @@ export default function OrderListPage() {
     const recVendor = conv > 0 ? recQty / conv : 0
     const actVendor = conv > 0 ? actQty / conv : 0
     const diff = Math.abs(recVendor - actVendor)
-    const pct  = recVendor > 0 ? diff / recVendor : 0
+    const pct = recVendor > 0 ? diff / recVendor : 0
     if (pct <= 0.1) return 'ok'
     if (pct <= 0.25) return 'warn'
     return 'over'
   }
 
   const statusStyle = (s: string) => ({
-    ok:      'bg-green-50 border-green-200',
-    warn:    'bg-amber-50 border-amber-200',
-    over:    'bg-red-50 border-red-200',
+    ok: 'bg-green-50 border-green-200',
+    warn: 'bg-amber-50 border-amber-200',
+    over: 'bg-red-50 border-red-200',
     missing: 'bg-red-50 border-red-200',
-    none:    'bg-gray-50 border-gray-100',
+    none: 'bg-gray-50 border-gray-100',
   }[s] || 'bg-gray-50 border-gray-100')
 
   const statusIcon = (s: string) => {
-    if (s === 'ok')      return <CheckCircle  className="w-4 h-4 text-green-500 flex-shrink-0" />
-    if (s === 'warn')    return <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-    if (s === 'over')    return <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
-    if (s === 'missing') return <Minus         className="w-4 h-4 text-red-400 flex-shrink-0" />
+    if (s === 'ok') return <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+    if (s === 'warn') return <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+    if (s === 'over') return <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+    if (s === 'missing') return <Minus className="w-4 h-4 text-red-400 flex-shrink-0" />
     return null
   }
 
   const rowBg = (code: string, unitsToBuy: number) => {
     if (unitsToBuy === 0) return ''
     const s = shopStatus[code]
-    if (s === 'full')    return 'bg-green-50'
+    if (s === 'full') return 'bg-green-50'
     if (s === 'partial') return 'bg-amber-50'
     return 'bg-red-50'
   }
 
   // Price cell renderer — handles view, edit, and missing
   const renderPriceBlock = (line: any) => {
-    const entry     = getPriceEntry(line.code)
+    const entry = getPriceEntry(line.code)
     const unitPrice = entry?.unit_price ?? null
-    const lineCost  = calcLineCost(line)
+    const lineCost = calcLineCost(line)
     const isEditing = editingPrice === line.code
 
     if (isEditing) {
@@ -413,6 +480,52 @@ export default function OrderListPage() {
       >
         <AlertTriangle className="w-3 h-3" />
         Add price
+      </button>
+    )
+  }
+
+  // Buffer cell renderer — inline editable percentage
+  const renderBufferBlock = (line: any) => {
+    const pct = getBufferPct(line.code, ingMeta[line.code])
+    const isEditing = editingBuffer === line.code
+
+    if (isEditing) {
+      return (
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-gray-500">Buffer:</span>
+          <input
+            ref={bufferInputRef}
+            type="number"
+            min="0"
+            max="1000"
+            step="1"
+            inputMode="numeric"
+            value={bufferDraft}
+            onChange={e => setBufferDraft(e.target.value)}
+            onBlur={() => saveBufferFor(line.code, bufferDraft)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') saveBufferFor(line.code, bufferDraft)
+              else if (e.key === 'Escape') { setEditingBuffer(null); setBufferDraft('') }
+            }}
+            placeholder="0"
+            className="w-14 text-center text-xs border border-brand-400 rounded px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-brand-400"
+          />
+          <span className="text-xs text-gray-400">%</span>
+        </div>
+      )
+    }
+
+    return (
+      <button
+        onClick={() => { setEditingBuffer(line.code); setBufferDraft(String(pct)) }}
+        className="flex items-center gap-1 text-xs text-gray-500 hover:text-brand-700"
+        title="Click to edit buffer% for this item"
+      >
+        <span>Buffer:</span>
+        <span className={`font-semibold ${pct === 0 ? 'text-orange-500' : 'text-blue-600'}`}>
+          {pct}%
+        </span>
+        <Pencil className="w-3 h-3 opacity-60" />
       </button>
     )
   }
@@ -501,7 +614,6 @@ export default function OrderListPage() {
           <div className="flex justify-center py-16"><LoadingSpinner /></div>
         ) : !data ? null : (
           <div className="space-y-4">
-
             {/* Shopping progress bar */}
             {totalToBuy > 0 && (
               <div className="bg-white border border-gray-200 rounded-xl p-4">
@@ -540,7 +652,7 @@ export default function OrderListPage() {
                     <ShoppingCart className="w-4 h-4 text-gray-500" />
                     <span className="text-sm font-medium text-gray-700">Expected total cost</span>
                     <a href="/admin/prices"
-                      className="text-xs text-brand-600 hover:text-brand-800 underline ml-2">
+                       className="text-xs text-brand-600 hover:text-brand-800 underline ml-2">
                       Manage prices
                     </a>
                   </div>
@@ -566,116 +678,111 @@ export default function OrderListPage() {
             )}
 
             <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 text-xs text-blue-700 flex items-center gap-2">
-              <span className="font-semibold">Newport buffer active:</span>
-              Non-perishable items are ordered 50% above need. Perishables (Bone-in Chicken, Tomatoes, Cilantro) are ordered exact.
+              <span className="font-semibold">Per-item buffer:</span>
+              Each item has its own buffer%. Click the Buffer field on any row to change it (0% = exact, 50% = +50% extra).
             </div>
 
             {sortedGroupEntries.map(([category, catLines]) => {
-              const catToOrder  = catLines.filter(l => calcUnitsToBuy(l, ingMeta) > 0)
+              const catToOrder = catLines.filter(l => calcUnitsToBuy(l, ingMeta) > 0)
               const catSubtotal = catToOrder.reduce((s: number, l: any) => s + (calcLineCost(l) || 0), 0)
-              const catMissing  = catToOrder.filter(l => getUnitPrice(l.code) == null).length
+              const catMissing = catToOrder.filter(l => getUnitPrice(l.code) == null).length
 
               return (
-              <Card key={category} className="p-0 overflow-hidden">
-                <div className="px-4 py-2.5 bg-brand-900 text-white font-semibold text-sm flex justify-between items-center">
-                  <span>{category}</span>
-                  <span className="text-brand-300 text-xs flex items-center gap-3">
-                    <span>{catToOrder.length} to order</span>
-                    {catToOrder.length > 0 && (
-                      <span className="text-white">
-                        {formatMoney(catSubtotal)}
-                        {catMissing > 0 && (
-                          <span className="text-amber-300 ml-1" title={`${catMissing} item(s) missing price`}>*</span>
-                        )}
-                      </span>
-                    )}
-                  </span>
-                </div>
-                <div className="divide-y divide-gray-100">
-                  {catLines.map((line: any) => {
-                    const ing          = ingMeta[line.code]
-                    const needed       = Number(line.needed) || 0
-                    const conv         = Number(line.convFactor) || 1
-                    const currentOnHand = (onHand[line.code] || 0) * conv
-                    const netNeeded    = Math.max(0, needed - currentOnHand)
-                    const isPerishable = PERISHABLE_CODES.has(line.code)
-                    const unitsToBuy   = calcUnitsToBuy(line, ingMeta)
-                    const status       = shopStatus[line.code]
-                    const displayName  = ing?.name || line.code
+                <Card key={category} className="p-0 overflow-hidden">
+                  <div className="px-4 py-2.5 bg-brand-900 text-white font-semibold text-sm flex justify-between items-center">
+                    <span>{category}</span>
+                    <span className="text-brand-300 text-xs flex items-center gap-3">
+                      <span>{catToOrder.length} to order</span>
+                      {catToOrder.length > 0 && (
+                        <span className="text-white">
+                          {formatMoney(catSubtotal)}
+                          {catMissing > 0 && (
+                            <span className="text-amber-300 ml-1" title={`${catMissing} item(s) missing price`}>*</span>
+                          )}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {catLines.map((line: any) => {
+                      const ing = ingMeta[line.code]
+                      const needed = Number(line.needed) || 0
+                      const conv = Number(line.convFactor) || 1
+                      const currentOnHand = (onHand[line.code] || 0) * conv
+                      const netNeeded = Math.max(0, needed - currentOnHand)
+                      const unitsToBuy = calcUnitsToBuy(line, ingMeta)
+                      const bufferPct = getBufferPct(line.code, ing)
+                      const status = shopStatus[line.code]
+                      const displayName = ing?.name || line.code
 
-                    return (
-                      <div key={line.code} className={`px-4 py-3 transition-colors ${rowBg(line.code, unitsToBuy)}`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-gray-800 truncate">{displayName}</div>
-                            <div className="text-xs text-gray-400">
-                              {line.code} · needed: {needed.toFixed(1)} {ing?.recipe_unit || ''}
-                              {isPerishable && (
-                                <span className="ml-2 text-orange-500 font-medium">· exact (perishable)</span>
-                              )}
+                      return (
+                        <div key={line.code} className={`px-4 py-3 transition-colors ${rowBg(line.code, unitsToBuy)}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium text-gray-800 truncate">{displayName}</div>
+                              <div className="text-xs text-gray-400">
+                                {line.code} · needed: {needed.toFixed(1)} {ing?.recipe_unit || ''}
+                              </div>
                             </div>
+                            {unitsToBuy > 0 && (
+                              <div className="flex-shrink-0 text-right min-w-[180px]">
+                                <span className="text-sm font-bold text-white bg-brand-600 px-3 py-1 rounded-full">
+                                  Buy {unitsToBuy}
+                                </span>
+                                {bufferPct > 0 && (
+                                  <div className="text-xs text-blue-500 mt-0.5">+{bufferPct}% buffer</div>
+                                )}
+                                {ing?.vendor_unit_desc && (
+                                  <div className="text-xs text-gray-400 mt-0.5">{ing.vendor_unit_desc}</div>
+                                )}
+                                {renderPriceBlock(line)}
+                              </div>
+                            )}
                           </div>
-                          {unitsToBuy > 0 && (
-                            <div className="flex-shrink-0 text-right min-w-[180px]">
-                              <span className="text-sm font-bold text-white bg-brand-600 px-3 py-1 rounded-full">
-                                Buy {unitsToBuy}
+                          <div className="flex items-center gap-3 mt-2 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500">On Hand:</span>
+                              <input type="number" min="0" step="any" inputMode="decimal"
+                                value={onHand[line.code] ?? 0}
+                                onChange={e => setOnHand(prev => ({ ...prev, [line.code]: Number(e.target.value) }))}
+                                className="w-20 text-center text-sm border border-green-200 bg-green-50 text-green-800 font-semibold rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-green-400"
+                              />
+                              <span className="text-xs text-gray-400">
+                                {ing?.vendor_unit_desc ? ing.vendor_unit_desc.split('=')[0].trim().split(' ')[0] : ing?.recipe_unit}
                               </span>
-                              {!isPerishable && (
-                                <div className="text-xs text-blue-500 mt-0.5">+50% buffer</div>
-                              )}
-                              {ing?.vendor_unit_desc && (
-                                <div className="text-xs text-gray-400 mt-0.5">{ing.vendor_unit_desc}</div>
-                              )}
-                              {renderPriceBlock(line)}
                             </div>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-3 mt-2 flex-wrap">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500">On Hand:</span>
-                            <input type="number" min="0" step="any" inputMode="decimal"
-                              value={onHand[line.code] ?? 0}
-                              onChange={e => setOnHand(prev => ({ ...prev, [line.code]: Number(e.target.value) }))}
-                              className="w-20 text-center text-sm border border-green-200 bg-green-50 text-green-800 font-semibold rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-green-400"
-                            />
-                            <span className="text-xs text-gray-400">
-                              {ing?.vendor_unit_desc ? ing.vendor_unit_desc.split('=')[0].trim().split(' ')[0] : ing?.recipe_unit}
-                            </span>
+                            {renderBufferBlock(line)}
+                            {netNeeded > 0 && (
+                              <span className="text-xs text-gray-500">need {netNeeded.toFixed(1)} {ing?.recipe_unit} more</span>
+                            )}
+                            {unitsToBuy > 0 && (
+                              <div className="flex items-center gap-1.5 ml-auto">
+                                <button
+                                  onClick={() => setItemStatus(line.code, status === 'full' ? null : 'full')}
+                                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all border ${
+                                    status === 'full'
+                                      ? 'bg-green-500 text-white border-green-500'
+                                      : 'bg-white text-gray-500 border-gray-200 hover:border-green-400 hover:text-green-600'
+                                  }`}>
+                                  ✓ Fully bought
+                                </button>
+                                <button
+                                  onClick={() => setItemStatus(line.code, status === 'partial' ? null : 'partial')}
+                                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all border ${
+                                    status === 'partial'
+                                      ? 'bg-amber-400 text-white border-amber-400'
+                                      : 'bg-white text-gray-500 border-gray-200 hover:border-amber-400 hover:text-amber-600'
+                                  }`}>
+                                  ~ Partial
+                                </button>
+                              </div>
+                            )}
                           </div>
-
-                          {netNeeded > 0 && (
-                            <span className="text-xs text-gray-500">need {netNeeded.toFixed(1)} {ing?.recipe_unit} more</span>
-                          )}
-
-                          {unitsToBuy > 0 && (
-                            <div className="flex items-center gap-1.5 ml-auto">
-                              <button
-                                onClick={() => setItemStatus(line.code, status === 'full' ? null : 'full')}
-                                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all border ${
-                                  status === 'full'
-                                    ? 'bg-green-500 text-white border-green-500'
-                                    : 'bg-white text-gray-500 border-gray-200 hover:border-green-400 hover:text-green-600'
-                                }`}>
-                                ✓ Fully bought
-                              </button>
-                              <button
-                                onClick={() => setItemStatus(line.code, status === 'partial' ? null : 'partial')}
-                                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all border ${
-                                  status === 'partial'
-                                    ? 'bg-amber-400 text-white border-amber-400'
-                                    : 'bg-white text-gray-500 border-gray-200 hover:border-amber-400 hover:text-amber-600'
-                                }`}>
-                                ~ Partial
-                              </button>
-                            </div>
-                          )}
                         </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </Card>
+                      )
+                    })}
+                  </div>
+                </Card>
               )
             })}
 
@@ -748,6 +855,7 @@ export default function OrderListPage() {
                 if (!byCategory[cat]) byCategory[cat] = []
                 byCategory[cat].push(item)
               }
+
               return Object.entries(byCategory).map(([cat, items]) => (
                 <Card key={cat} className="p-0 overflow-hidden">
                   <button
@@ -759,18 +867,17 @@ export default function OrderListPage() {
                     </div>
                     <span className="text-brand-300 text-xs">{(items as any[]).length} items</span>
                   </button>
-
                   {(expanded[cat] !== false) && (
                     <div className="divide-y divide-gray-50">
                       {(items as any[]).map((item: any) => {
-                        const actual      = recon.actual?.[item.ingredient_code]
+                        const actual = recon.actual?.[item.ingredient_code]
                         const actRecipeQty = actual?.qty || 0
-                        const conv        = Number(item.conv_factor) || 1
+                        const conv = Number(item.conv_factor) || 1
                         const recVendorQty = item.recommended_vendor_qty
                         const actVendorQty = conv > 0 ? actRecipeQty / conv : 0
-                        const status      = getVarianceStatus(recVendorQty, actVendorQty, 1)
-                        const diff        = actVendorQty - recVendorQty
-                        const diffPct     = recVendorQty > 0 ? ((diff / recVendorQty) * 100).toFixed(0) : null
+                        const status = getVarianceStatus(recVendorQty, actVendorQty, 1)
+                        const diff = actVendorQty - recVendorQty
+                        const diffPct = recVendorQty > 0 ? ((diff / recVendorQty) * 100).toFixed(0) : null
 
                         return (
                           <div key={item.id} className={`p-4 border-l-4 ${statusStyle(status)}`}>
@@ -784,9 +891,9 @@ export default function OrderListPage() {
                                   </div>
                                   {diffPct && (
                                     <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                                      status === 'ok'   ? 'bg-green-100 text-green-700' :
+                                      status === 'ok' ? 'bg-green-100 text-green-700' :
                                       status === 'warn' ? 'bg-amber-100 text-amber-700' :
-                                                          'bg-red-100 text-red-700'
+                                      'bg-red-100 text-red-700'
                                     }`}>
                                       {diff > 0 ? '+' : ''}{Number(diff.toFixed(1))} {item.vendor_unit_desc?.split('=')[0]?.trim()?.split(' ')[0] || item.recipe_unit}
                                       {diffPct && ` (${diff > 0 ? '+' : ''}${diffPct}%)`}
@@ -807,9 +914,9 @@ export default function OrderListPage() {
                                     )}
                                   </div>
                                   <div className={`rounded-lg p-2.5 border ${
-                                    status === 'ok'   ? 'bg-green-50 border-green-200' :
+                                    status === 'ok' ? 'bg-green-50 border-green-200' :
                                     status === 'warn' ? 'bg-amber-50 border-amber-200' :
-                                                        'bg-red-50 border-red-200'
+                                    'bg-red-50 border-red-200'
                                   }`}>
                                     <div className="text-xs text-gray-400 mb-0.5">Actually bought</div>
                                     {actRecipeQty > 0 ? (
