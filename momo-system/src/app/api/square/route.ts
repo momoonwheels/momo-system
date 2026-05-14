@@ -30,6 +30,9 @@ function endUTC(date: string) {
   return d.toISOString().split('T')[0] + 'T06:59:59.999Z'
 }
 
+// Square money helper — converts cents to dollars safely
+const m = (money: any): number => (money?.amount || 0) / 100
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const action = searchParams.get('action')
@@ -46,63 +49,105 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── SALES via Payments API ─────────────────────────────────────
+  // ── SALES via Orders Search API ────────────────────────────────
+  // Square's dashboard "Net Sales" = Gross Sales − Returns − Discounts
+  // The Orders API gives us order.net_amounts which already excludes
+  // discounts and returns at the order level. So:
+  //   netSales = sum(order.net_amounts.total_money)
+  //            - sum(order.net_amounts.tip_money)
+  //            - sum(order.net_amounts.tax_money)
+  //            - sum(refund.amount_money)
   if (action === 'sales') {
     const locationId = searchParams.get('square_location_id')
     if (!locationId || !startDate || !endDate)
       return NextResponse.json({ error: 'missing params' }, { status: 400 })
 
     try {
-      let allPayments: any[] = []
+      // Fetch ALL completed orders for this location in the date range
+      let allOrders: any[] = []
       let cursor: string | undefined
-
       do {
-        let url = `/payments?location_id=${locationId}&begin_time=${startUTC(startDate)}&end_time=${endUTC(endDate)}&limit=200&sort_order=ASC`
-        if (cursor) url += `&cursor=${cursor}`
-        const data = await squareFetch(url)
-        allPayments = allPayments.concat(data.payments || [])
+        const body: any = {
+          location_ids: [locationId],
+          query: {
+            filter: {
+              date_time_filter: {
+                closed_at: { start_at: startUTC(startDate), end_at: endUTC(endDate) }
+              },
+              state_filter: { states: ['COMPLETED'] }
+            },
+            sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' }
+          },
+          limit: 500,
+          ...(cursor ? { cursor } : {})
+        }
+        const data = await squareFetch('/orders/search', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        })
+        allOrders = allOrders.concat(data.orders || [])
         cursor = data.cursor
       } while (cursor)
 
-      let grossSales = 0
+      // Aggregate
+      let grossOrderTotal = 0   // sum of net_amounts.total_money (excl returns/discounts at order level)
       let tipTotal = 0
-      let processingFees = 0
+      let taxTotal = 0
+      let serviceChargeTotal = 0
+      let discountTotal = 0      // for visibility / display
       let refunds = 0
-      const completedPayments = allPayments.filter(p => p.status === 'COMPLETED')
+      let processingFees = 0
+      let orderCount = 0
 
-      for (const p of completedPayments) {
-        // total_money includes tips
-        const total = (p.total_money?.amount || 0) / 100
-        const tip = (p.tip_money?.amount || 0) / 100
-        const refund = (p.refunded_money?.amount || 0) / 100
-        grossSales += total
-        tipTotal += tip
-        refunds += refund
-        for (const fee of p.processing_fee || []) {
-          processingFees += Math.abs((fee.amount_money?.amount || 0) / 100)
+      for (const order of allOrders) {
+        orderCount++
+        grossOrderTotal     += m(order.net_amounts?.total_money)
+        tipTotal            += m(order.net_amounts?.tip_money)
+        taxTotal            += m(order.net_amounts?.tax_money)
+        serviceChargeTotal  += m(order.net_amounts?.service_charge_money)
+        discountTotal       += m(order.total_discount_money) // already excluded from net_amounts; just for reporting
+
+        // Refunds attached to this order
+        for (const refund of order.refunds || []) {
+          if (refund.status === 'COMPLETED' || refund.status === 'APPROVED') {
+            refunds += m(refund.amount_money)
+          }
+        }
+
+        // Processing fees (also embedded in order.tenders[].processing_fee_money on some accounts)
+        for (const tender of order.tenders || []) {
+          processingFees += m(tender.processing_fee_money)
         }
       }
 
-      // Net sales = gross - tips (tips are pass-through to staff)
-      // Discounts are already deducted in Square's total_money
-      const netSales = grossSales - tipTotal - refunds
+      // Square dashboard "Net Sales" math:
+      //   net_amounts.total_money = subtotal + tax + tip + service charges (already excludes discounts/returns)
+      //   → strip tax, tip, service charges to get the business income
+      //   → subtract refunds (returns)
+      const netSales = grossOrderTotal - tipTotal - taxTotal - serviceChargeTotal - refunds
+
+      // For display, also expose "gross sales" the way Square shows it
+      // (pre-refund subtotal of items, excluding tax/tip/service)
+      const grossSales = grossOrderTotal - tipTotal - taxTotal - serviceChargeTotal
 
       return NextResponse.json({
-        grossSales,
+        grossSales,       // before refunds, after discounts
+        netSales,         // after refunds, after discounts, no tax/tip/service
         tipTotal,
+        taxTotal,
+        discountTotal,
+        serviceChargeTotal,
         refunds,
         processingFees,
-        netSales,
-        orderCount: completedPayments.length,
+        orderCount,
         debug: {
           startAt: startUTC(startDate),
           endAt: endUTC(endDate),
-          totalPayments: allPayments.length,
-          completed: completedPayments.length
+          totalOrders: allOrders.length,
         }
       })
     } catch(e) {
-      return NextResponse.json({ grossSales:0, netSales:0, tipTotal:0, refunds:0, processingFees:0, orderCount:0, error: String(e) })
+      return NextResponse.json({ grossSales:0, netSales:0, tipTotal:0, taxTotal:0, refunds:0, processingFees:0, orderCount:0, error: String(e) })
     }
   }
 
@@ -116,7 +161,7 @@ export async function GET(req: NextRequest) {
         const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
         for (const entry of entriesRes.payout_entries || []) {
           if (entry.type === 'CHARGE') {
-            processingFees += Math.abs((entry.fee_amount_money?.amount || 0) / 100)
+            processingFees += Math.abs(m(entry.fee_amount_money))
           }
         }
       }
@@ -136,33 +181,25 @@ export async function GET(req: NextRequest) {
       let capitalEntries = 0
 
       for (const payout of payoutsRes.payouts || []) {
-        totalPayoutAmount += (payout.amount_money?.amount || 0) / 100
+        totalPayoutAmount += m(payout.amount_money)
+
         const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
-        
-        let payoutGross = 0
-        let payoutFees = 0
+
         let payoutCapital = 0
 
         for (const entry of entriesRes.payout_entries || []) {
-          if (entry.type === 'CHARGE') {
-            // gross sales amount for this entry
-            payoutGross += (entry.gross_amount_money?.amount || 0) / 100
-            payoutFees += Math.abs((entry.fee_amount_money?.amount || 0) / 100)
-          }
           if (entry.type === 'SQUARE_CAPITAL_PAYMENT') {
             capitalEntries++
-            // Try all possible amount fields
-            const amt = (entry.amount_money?.amount || 
-                        entry.gross_amount_money?.amount || 
-                        entry.net_amount_money?.amount || 0) / 100
+            const amt = (entry.amount_money?.amount ||
+                         entry.gross_amount_money?.amount ||
+                         entry.net_amount_money?.amount || 0) / 100
             payoutCapital += Math.abs(amt)
           }
         }
         loanRepayment += payoutCapital
       }
-
-      return NextResponse.json({ 
-        loanRepayment, 
+      return NextResponse.json({
+        loanRepayment,
         totalPayoutAmount,
         capitalEntries,
         debug: { payouts: payoutsRes.payouts?.length }
