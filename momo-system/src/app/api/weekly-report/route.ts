@@ -15,7 +15,7 @@ const PKG_PER_10: Record<string, Record<string,number>> = {
   FRI: { 'FM-1':1 },
   CHI: { 'FM-1':1, 'CM-1':1, 'CM-2':1 },
   JHO: { 'FM-1':1, 'JM-1':1, 'JM-3':1, 'JM-4':1, 'JM-5':1 },
-  CW:  { 'CH-1':1, 'CH-3':1, 'CH-4':1, 'CH-5':1, 'CH-6':1, 'CH-7':1 },
+  CW: { 'CH-1':1, 'CH-3':1, 'CH-4':1, 'CH-5':1, 'CH-6':1, 'CH-7':1 },
 }
 
 export async function GET(req: NextRequest) {
@@ -23,7 +23,6 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const weekStart = searchParams.get('week_start')
   const locationId = searchParams.get('location_id') // optional, null = combined
-
   if (!weekStart) return NextResponse.json({ error: 'week_start required' }, { status: 400 })
 
   // Get week end date
@@ -37,6 +36,9 @@ export async function GET(req: NextRequest) {
     ? (locations||[]).filter(l => l.id === locationId)
     : (locations||[])
 
+  // Location ids we'll filter every per-location query by
+  const targetLocationIds = targetLocations.map(l => l.id)
+
   // ── 1. PLANNED ORDERS ─────────────────────────────────────────────
   const { data: menuItems } = await sb.from('menu_items').select('*')
   const menuMap: Record<string,any> = {}
@@ -47,12 +49,13 @@ export async function GET(req: NextRequest) {
 
   for (const loc of targetLocations) {
     const { data: orders } = await sb.from('planned_orders')
-  .select('*, menu_items(code)')
-  .eq('location_id', loc.id)
-  .gte('week_start', weekStart)
-  .lte('week_start', weekEndStr)
-    
+      .select('*, menu_items(code)')
+      .eq('location_id', loc.id)
+      .gte('week_start', weekStart)
+      .lte('week_start', weekEndStr)
+
     plannedByLocation[loc.id] = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
+
     const days = ['mon','tue','wed','thu','fri','sat','sun']
     for (const row of orders||[]) {
       const code = (row.menu_items as any)?.code as string
@@ -72,9 +75,11 @@ export async function GET(req: NextRequest) {
 
   if (TOKEN) {
     const { data: sqLocations } = await sb.from('square_locations').select('*')
+
     for (const loc of targetLocations) {
       const sqLoc = sqLocations?.find(s => s.app_location_id === loc.id)
       if (!sqLoc) continue
+
       try {
         const res = await fetch('https://connect.squareup.com/v2/orders/search', {
           method: 'POST',
@@ -90,11 +95,13 @@ export async function GET(req: NextRequest) {
             limit: 500
           })
         })
+
         const data = await res.json()
         for (const order of data.orders||[]) {
           totalRevenue += (order.total_money?.amount||0) / 100
           totalRefunds += (order.refunds?.reduce((s:number,r:any) => s+(r.amount_money?.amount||0), 0)||0) / 100
           orderCount++
+
           // Match line items to menu codes
           for (const item of order.line_items||[]) {
             const name = (item.name||'').toLowerCase()
@@ -130,12 +137,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Packages sent = sum of delivery log entries for the week
+  // Packages sent = sum of delivery log entries for the week (filtered by location)
+  // BUGFIX: previously this query had no location filter, so it always summed
+  // deliveries across every truck regardless of the dropdown selection.
   const { data: deliveryLogs } = await sb.from('truck_inventory_log')
-    .select('package_id, quantity, packages(code)')
+    .select('package_id, quantity, location_id, packages(code)')
     .eq('log_type', 'delivery')
     .gte('log_date', weekStart)
     .lte('log_date', weekEndStr)
+    .in('location_id', targetLocationIds)
 
   const packagesSent: Record<string,number> = {}
   for (const log of deliveryLogs||[]) {
@@ -145,6 +155,7 @@ export async function GET(req: NextRequest) {
 
   // Get all packages for display
   const { data: packages } = await sb.from('packages').select('code,name,containers(code)').order('sort_order')
+
   const packageVariance = (packages||[]).map((pkg:any) => {
     const sent = packagesSent[pkg.code] || 0
     const used = packagesUsed[pkg.code] || 0
@@ -170,6 +181,7 @@ export async function GET(req: NextRequest) {
     const tenOrders = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
     tenOrders[menuCode as keyof typeof tenOrders] = 10
     const needs = calcIngredientNeeds(tenOrders, cfg, recipeMap)
+
     let totalCost = 0
     for (const [code, qty] of Object.entries(needs)) {
       totalCost += qty * (ingCostMap[code] || 0)
@@ -183,6 +195,7 @@ export async function GET(req: NextRequest) {
   // Theoretical: recipe × actual sales × ingredient cost
   const actualOrders = { REG: actualByMenu.REG, FRI: actualByMenu.FRI, CHI: actualByMenu.CHI, JHO: actualByMenu.JHO, CW: actualByMenu.CW }
   const ingredientNeeds = calcIngredientNeeds(actualOrders, cfg, recipeMap)
+
   let theoreticalFoodCost = 0
   for (const [code, qty] of Object.entries(ingredientNeeds)) {
     theoreticalFoodCost += qty * (ingCostMap[code] || 0)
@@ -194,11 +207,13 @@ export async function GET(req: NextRequest) {
     .eq('status', 'confirmed')
     .gte('receipts.receipt_date', weekStart)
     .lte('receipts.receipt_date', weekEndStr)
+
   const actualFoodCost = receiptLines?.reduce((s:number,l:any) => s+(Number(l.total_price)||0), 0) || 0
 
   // ── 7. EXPENSES ───────────────────────────────────────────────────
   const { data: expenses } = await sb.from('manual_expenses')
     .select('*').gte('expense_date', weekStart).lte('expense_date', weekEndStr)
+
   const totalExpenses = expenses?.reduce((s:number,e:any) => s+(Number(e.amount)||0), 0) || 0
 
   // Labor from Square (shifts)
