@@ -18,6 +18,9 @@ const PKG_PER_10: Record<string, Record<string,number>> = {
   CW: { 'CH-1':1, 'CH-3':1, 'CH-4':1, 'CH-5':1, 'CH-6':1, 'CH-7':1 },
 }
 
+// Square money helper — converts cents to dollars safely
+const m = (money: any): number => (money?.amount || 0) / 100
+
 export async function GET(req: NextRequest) {
   const sb = createServerClient()
   const { searchParams } = new URL(req.url)
@@ -42,7 +45,7 @@ export async function GET(req: NextRequest) {
   // ── 1. PLANNED ORDERS ─────────────────────────────────────────────
   const { data: menuItems } = await sb.from('menu_items').select('*')
   const menuMap: Record<string,any> = {}
-  for (const m of menuItems||[]) menuMap[m.id] = m
+  for (const mi of menuItems||[]) menuMap[mi.id] = mi
 
   const plannedByMenu: Record<string,number> = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
   const plannedByLocation: Record<string, Record<string,number>> = {}
@@ -66,12 +69,22 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── 2. ACTUAL SALES FROM SQUARE ───────────────────────────────────
+  // ── 2. ACTUAL SALES FROM SQUARE (Orders API, proper Net Sales math) ──
   const TOKEN = process.env.SQUARE_ACCESS_TOKEN
   const actualByMenu: Record<string,number> = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
-  let totalRevenue = 0
+  let grossOrderTotal = 0       // sum of order.net_amounts.total_money
+  let tipTotal = 0
+  let taxTotal = 0
+  let serviceChargeTotal = 0
+  let discountTotal = 0
   let totalRefunds = 0
   let orderCount = 0
+
+  // Date-time UTC bounds for Pacific time (matches /api/square route)
+  const startAtISO = `${weekStart}T07:00:00.000Z`
+  const endAtUTC = new Date(weekEndStr + 'T00:00:00Z')
+  endAtUTC.setDate(endAtUTC.getDate() + 1)
+  const endAtISO = endAtUTC.toISOString().split('T')[0] + 'T06:59:59.999Z'
 
   if (TOKEN) {
     const { data: sqLocations } = await sb.from('square_locations').select('*')
@@ -81,42 +94,76 @@ export async function GET(req: NextRequest) {
       if (!sqLoc) continue
 
       try {
-        const res = await fetch('https://connect.squareup.com/v2/orders/search', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'Square-Version': '2024-01-18' },
-          body: JSON.stringify({
+        // Paginated Orders Search
+        let allOrders: any[] = []
+        let cursor: string | undefined
+        do {
+          const body: any = {
             location_ids: [sqLoc.square_location_id],
             query: {
               filter: {
-                date_time_filter: { created_at: { start_at: `${weekStart}T00:00:00Z`, end_at: `${weekEndStr}T23:59:59Z` } },
+                date_time_filter: {
+                  closed_at: { start_at: startAtISO, end_at: endAtISO }
+                },
                 state_filter: { states: ['COMPLETED'] }
-              }
+              },
+              sort: { sort_field: 'CLOSED_AT', sort_order: 'ASC' }
             },
-            limit: 500
+            limit: 500,
+            ...(cursor ? { cursor } : {})
+          }
+          const res = await fetch('https://connect.squareup.com/v2/orders/search', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${TOKEN}`,
+              'Content-Type': 'application/json',
+              'Square-Version': '2024-01-18'
+            },
+            body: JSON.stringify(body),
           })
-        })
+          const data = await res.json()
+          allOrders = allOrders.concat(data.orders || [])
+          cursor = data.cursor
+        } while (cursor)
 
-        const data = await res.json()
-        for (const order of data.orders||[]) {
-          totalRevenue += (order.total_money?.amount||0) / 100
-          totalRefunds += (order.refunds?.reduce((s:number,r:any) => s+(r.amount_money?.amount||0), 0)||0) / 100
+        for (const order of allOrders) {
           orderCount++
+          grossOrderTotal    += m(order.net_amounts?.total_money)
+          tipTotal           += m(order.net_amounts?.tip_money)
+          taxTotal           += m(order.net_amounts?.tax_money)
+          serviceChargeTotal += m(order.net_amounts?.service_charge_money)
+          discountTotal      += m(order.total_discount_money)
 
-          // Match line items to menu codes
-          for (const item of order.line_items||[]) {
-            const name = (item.name||'').toLowerCase()
-            if (name.includes('regular') || name.includes('steamed') || name.includes('steam')) actualByMenu.REG += Number(item.quantity)||1
-            else if (name.includes('fried')) actualByMenu.FRI += Number(item.quantity)||1
-            else if (name.includes('chilli') || name.includes('chili')) actualByMenu.CHI += Number(item.quantity)||1
-            else if (name.includes('jhol')) actualByMenu.JHO += Number(item.quantity)||1
-            else if (name.includes('chow') || name.includes('noodle')) actualByMenu.CW += Number(item.quantity)||1
+          for (const refund of order.refunds || []) {
+            if (refund.status === 'COMPLETED' || refund.status === 'APPROVED') {
+              totalRefunds += m(refund.amount_money)
+            }
+          }
+
+          // Match line items to menu codes for sales-variance section
+          for (const item of order.line_items || []) {
+            const name = (item.name || '').toLowerCase()
+            const qty = Number(item.quantity) || 1
+            if (name.includes('regular') || name.includes('steamed') || name.includes('steam')) actualByMenu.REG += qty
+            else if (name.includes('fried')) actualByMenu.FRI += qty
+            else if (name.includes('chilli') || name.includes('chili')) actualByMenu.CHI += qty
+            else if (name.includes('jhol')) actualByMenu.JHO += qty
+            else if (name.includes('chow') || name.includes('noodle')) actualByMenu.CW += qty
           }
         }
       } catch(e) { console.error('Square error:', e) }
     }
   }
 
-  const netRevenue = totalRevenue - totalRefunds
+  // Square dashboard "Net Sales" formula:
+  //   netSales = sum(net_amounts.total) - tips - tax - service - refunds
+  // (net_amounts already excludes discounts and returns at the order level;
+  //  refunds are subtracted explicitly here for any post-close returns)
+  const netRevenue = grossOrderTotal - tipTotal - taxTotal - serviceChargeTotal - totalRefunds
+  const grossRevenue = grossOrderTotal - tipTotal - taxTotal - serviceChargeTotal
+  // Backwards-compat fields the page expects:
+  const totalRevenue = grossOrderTotal           // raw money rung up incl tips/tax
+  const totalRefundsLegacy = totalRefunds
 
   // ── 3. SALES VARIANCE ─────────────────────────────────────────────
   const salesVariance = Object.keys(plannedByMenu).map(code => {
@@ -128,7 +175,6 @@ export async function GET(req: NextRequest) {
   })
 
   // ── 4. PACKAGE VARIANCE ────────────────────────────────────────────
-  // Packages used = actual sales / 10 per package type
   const packagesUsed: Record<string,number> = {}
   for (const [menuCode, pkgMap] of Object.entries(PKG_PER_10)) {
     const orders = actualByMenu[menuCode] || 0
@@ -138,8 +184,6 @@ export async function GET(req: NextRequest) {
   }
 
   // Packages sent = sum of delivery log entries for the week (filtered by location)
-  // BUGFIX: previously this query had no location filter, so it always summed
-  // deliveries across every truck regardless of the dropdown selection.
   const { data: deliveryLogs } = await sb.from('truck_inventory_log')
     .select('package_id, quantity, location_id, packages(code)')
     .eq('log_type', 'delivery')
@@ -153,7 +197,6 @@ export async function GET(req: NextRequest) {
     if (code) packagesSent[code] = (packagesSent[code]||0) + Number(log.quantity)
   }
 
-  // Get all packages for display
   const { data: packages } = await sb.from('packages').select('code,name,containers(code)').order('sort_order')
 
   const packageVariance = (packages||[]).map((pkg:any) => {
@@ -174,10 +217,8 @@ export async function GET(req: NextRequest) {
     ingCostMap[ing.code] = Number(ing.cost_per_recipe_unit) || 0
   }
 
-  // Cost per package = recipe ingredients × cost per unit
   const costPerPackage: Record<string,number> = {}
   for (const [menuCode, pkgMap] of Object.entries(PKG_PER_10)) {
-    // For 10 orders, calculate ingredient cost
     const tenOrders = { REG:0, FRI:0, CHI:0, JHO:0, CW:0 }
     tenOrders[menuCode as keyof typeof tenOrders] = 10
     const needs = calcIngredientNeeds(tenOrders, cfg, recipeMap)
@@ -187,12 +228,11 @@ export async function GET(req: NextRequest) {
       totalCost += qty * (ingCostMap[code] || 0)
     }
     for (const pkgCode of Object.keys(pkgMap)) {
-      costPerPackage[pkgCode] = (costPerPackage[pkgCode]||0) + totalCost / 10 // cost per order
+      costPerPackage[pkgCode] = (costPerPackage[pkgCode]||0) + totalCost / 10
     }
   }
 
   // ── 6. FOOD COST VARIANCE ─────────────────────────────────────────
-  // Theoretical: recipe × actual sales × ingredient cost
   const actualOrders = { REG: actualByMenu.REG, FRI: actualByMenu.FRI, CHI: actualByMenu.CHI, JHO: actualByMenu.JHO, CW: actualByMenu.CW }
   const ingredientNeeds = calcIngredientNeeds(actualOrders, cfg, recipeMap)
 
@@ -201,7 +241,6 @@ export async function GET(req: NextRequest) {
     theoreticalFoodCost += qty * (ingCostMap[code] || 0)
   }
 
-  // Actual: from confirmed receipts this week
   const { data: receiptLines } = await sb.from('receipt_line_items')
     .select('total_price, receipts!inner(receipt_date, status)')
     .eq('status', 'confirmed')
@@ -220,7 +259,7 @@ export async function GET(req: NextRequest) {
   let laborCost = 0
   if (TOKEN) {
     try {
-      const res = await fetch(`https://connect.squareup.com/v2/labor/shifts?start_at=${weekStart}T00:00:00Z&end_at=${weekEndStr}T23:59:59Z&limit=200`, {
+      const res = await fetch(`https://connect.squareup.com/v2/labor/shifts?start_at=${startAtISO}&end_at=${endAtISO}&limit=200`, {
         headers: { 'Authorization': `Bearer ${TOKEN}`, 'Square-Version': '2024-01-18' }
       })
       const data = await res.json()
@@ -238,8 +277,12 @@ export async function GET(req: NextRequest) {
     packageVariance, costPerPackage,
     foodCost: { theoretical: theoreticalFoodCost, actual: actualFoodCost, variance: actualFoodCost - theoreticalFoodCost },
     pnl: {
-      revenue: netRevenue, grossRevenue: totalRevenue, refunds: totalRefunds,
-      foodCost: actualFoodCost, laborCost, otherExpenses: totalExpenses,
+      revenue: netRevenue,           // ← NOW matches Square's "Net Sales"
+      grossRevenue,                  // before refunds
+      refunds: totalRefundsLegacy,
+      tipTotal, taxTotal,            // for transparency
+      foodCost: actualFoodCost,
+      laborCost, otherExpenses: totalExpenses,
       grossProfit: netRevenue - actualFoodCost,
       netProfit: netRevenue - actualFoodCost - laborCost - totalExpenses
     },
