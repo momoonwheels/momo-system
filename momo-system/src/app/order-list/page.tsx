@@ -192,11 +192,11 @@ export default function OrderListPage() {
     setLocking(true)
     try {
       const lines = data.lines || []
-      const ingMeta = (data.ingredients || []).reduce((acc: any, ing: any) => {
+      const ingMetaMap = (data.ingredients || []).reduce((acc: any, ing: any) => {
         acc[ing.code] = ing; return acc
       }, {})
       const items = lines.map((line: any) => {
-        const ing = ingMeta[line.code] || {}
+        const ing = ingMetaMap[line.code] || {}
         const conv = Number(line.convFactor) || 1
         const recipeQty = Number(line.needed) || 0
         const currentOnHand = (onHand[line.code] || 0) * conv
@@ -280,7 +280,7 @@ export default function OrderListPage() {
     }
   }
 
-  // Save per-item buffer% (inline edit)
+  // Save per-item buffer% (inline edit) — uses existing PUT /api/ingredients
   const saveBufferFor = async (code: string, rawValue: string) => {
     const trimmed = rawValue.trim()
     if (trimmed === '') { setEditingBuffer(null); setBufferDraft(''); return }
@@ -289,11 +289,13 @@ export default function OrderListPage() {
       toast.error('Enter a number between 0 and 1000')
       return
     }
+    const ing = ingMeta[code]
+    if (!ing?.id) { toast.error('Cannot find ingredient id'); return }
     try {
-      const res = await fetch('/api/ingredient-buffer', {
-        method: 'PATCH',
+      const res = await fetch('/api/ingredients', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, buffer_pct: value }),
+        body: JSON.stringify({ id: ing.id, buffer_pct: value }),
       })
       const json = await res.json()
       if (!res.ok) { toast.error(json.error || 'Save failed'); return }
