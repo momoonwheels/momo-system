@@ -12,8 +12,8 @@ import LaborEntry from '@/components/ui/LaborEntry'
 const EXPENSE_CATEGORIES = ['Rent','Fuel','Repairs','Supplies','Insurance','Loan Payment','Utilities','Marketing','Other']
 
 const PRESETS = [
-  { label: 'This Week',  getRange: () => ({ start: format(startOfWeek(new Date(),{weekStartsOn:1}),'yyyy-MM-dd'), end: format(endOfWeek(new Date(),{weekStartsOn:1}),'yyyy-MM-dd') }) },
-  { label: 'Last Week',  getRange: () => ({ start: format(startOfWeek(subWeeks(new Date(),1),{weekStartsOn:1}),'yyyy-MM-dd'), end: format(endOfWeek(subWeeks(new Date(),1),{weekStartsOn:1}),'yyyy-MM-dd') }) },
+  { label: 'This Week', getRange: () => ({ start: format(startOfWeek(new Date(),{weekStartsOn:1}),'yyyy-MM-dd'), end: format(endOfWeek(new Date(),{weekStartsOn:1}),'yyyy-MM-dd') }) },
+  { label: 'Last Week', getRange: () => ({ start: format(startOfWeek(subWeeks(new Date(),1),{weekStartsOn:1}),'yyyy-MM-dd'), end: format(endOfWeek(subWeeks(new Date(),1),{weekStartsOn:1}),'yyyy-MM-dd') }) },
   { label: 'This Month', getRange: () => ({ start: format(startOfMonth(new Date()),'yyyy-MM-dd'), end: format(endOfMonth(new Date()),'yyyy-MM-dd') }) },
   { label: 'Last Month', getRange: () => ({ start: format(startOfMonth(subMonths(new Date(),1)),'yyyy-MM-dd'), end: format(endOfMonth(subMonths(new Date(),1)),'yyyy-MM-dd') }) },
 ]
@@ -32,6 +32,7 @@ export default function IncomeStatementPage() {
   const [endDate, setEndDate] = useState(format(endOfWeek(subWeeks(new Date(),0),{weekStartsOn:1}),'yyyy-MM-dd'))
   const [activePreset, setActivePreset] = useState('This Week')
   const [loading, setLoading] = useState(false)
+
   const [appLocations, setAppLocations] = useState<any[]>([])
   const [squareLocations, setSquareLocations] = useState<any[]>([])
   const [squareMapping, setSquareMapping] = useState<Record<string,string>>({})
@@ -45,23 +46,27 @@ export default function IncomeStatementPage() {
   const [expenses, setExpenses] = useState<any[]>([])
   const [showAddExpense, setShowAddExpense] = useState(false)
   const [newExpense, setNewExpense] = useState({ expense_date: format(new Date(),'yyyy-MM-dd'), category:'Rent', amount:'', notes:'' })
+
   // Labor - manual entry
   const [manualWages, setManualWages] = useState('')
   const [savedWages, setSavedWages] = useState(0)
   const [savingWages, setSavingWages] = useState(false)
+
   // Processing fees & loans from Square
   const [processingFees, setProcessingFees] = useState(0)
   const [loanRepayment, setLoanRepayment] = useState(0)
 
+  // ── Initial load: app locations (still public, fine to read directly),
+  //    Square mapping (now via API), and live Square locations list.
   useEffect(() => {
     Promise.all([
       supabase.from('locations').select('*').eq('type','food_truck').eq('active',true),
-      supabase.from('square_locations').select('*'),
+      fetch('/api/square-mapping').then(r => r.json()).catch(() => ({ mappings: [] })),
       fetch('/api/square?action=locations').then(r=>r.json()).catch(()=>({locations:[]}))
-    ]).then(([appLocs, savedMapping, sqLocs]) => {
+    ]).then(([appLocs, mappingData, sqLocs]) => {
       setAppLocations(appLocs.data||[])
       const mapping: Record<string,string> = {}
-      for (const m of savedMapping.data||[]) {
+      for (const m of mappingData.mappings || []) {
         if (m.app_location_id) mapping[m.app_location_id] = m.square_location_id
       }
       setSquareMapping(mapping)
@@ -90,7 +95,6 @@ export default function IncomeStatementPage() {
 
     // ── Sales from Square ──────────────────────────────────────────
     let totalGross = 0, totalNet = 0, totalTips = 0, totalDiscount = 0, totalRefunds = 0, totalOrders = 0, totalFees = 0
-
     for (const sqId of sqIds) {
       try {
         const res = await fetch(`/api/square?action=sales&square_location_id=${sqId}&start_date=${startDate}&end_date=${endDate}`)
@@ -109,18 +113,16 @@ export default function IncomeStatementPage() {
     setSalesData({ grossSales: totalGross, netSales: totalNet, tipTotal: totalTips, discountTotal: totalDiscount, refunds: totalRefunds, orderCount: totalOrders })
     setProcessingFees(totalFees)
 
-    // ── COGS from receipts ─────────────────────────────────────────
+    // ── COGS from confirmed receipts (via API) ─────────────────────
     try {
-      const { data: lines } = await supabase
-        .from('receipt_line_items')
-        .select('total_price, receipts!inner(receipt_date)')
-        .eq('status','confirmed')
-        .gte('receipts.receipt_date', startDate)
-        .lte('receipts.receipt_date', endDate)
-      setCogsData(lines?.reduce((s:number,l:any)=>s+(Number(l.total_price)||0),0)||0)
-    } catch(e) { console.error('COGS error:', e) }
-
-
+      const res = await fetch(`/api/cogs-summary?start_date=${startDate}&end_date=${endDate}`)
+      if (res.ok) {
+        const d = await res.json()
+        setCogsData(Number(d.total) || 0)
+      } else {
+        setCogsData(0)
+      }
+    } catch(e) { console.error('COGS error:', e); setCogsData(0) }
 
     // ── Loan from Square payouts ───────────────────────────────────
     try {
@@ -131,7 +133,7 @@ export default function IncomeStatementPage() {
       }
     } catch(e) {}
 
-    // ── Manual expenses ────────────────────────────────────────────
+    // ── Manual expenses (existing API) ─────────────────────────────
     try {
       const appLocId = getAppLocId()
       const url = `/api/manual-expenses?start_date=${startDate}&end_date=${endDate}${appLocId ? `&location_id=${appLocId}` : '&location_id=all'}`
@@ -139,17 +141,16 @@ export default function IncomeStatementPage() {
       setExpenses(Array.isArray(d) ? d : [])
     } catch(e) {}
 
-    // ── Saved wages for this period ────────────────────────────────
+    // ── Saved wages for this period (via API) ──────────────────────
     try {
-      const { data } = await supabase
-        .from('manual_expenses')
-        .select('amount')
-        .eq('category','__labor_wages__')
-        .gte('expense_date', startDate)
-        .lte('expense_date', endDate)
-      const total = data?.reduce((s,r)=>s+(Number(r.amount)||0),0) || 0
-      setSavedWages(total)
-      if (total > 0) setManualWages(total.toFixed(2))
+      const res = await fetch(`/api/labor-wages?start_date=${startDate}&end_date=${endDate}`)
+      if (res.ok) {
+        const d = await res.json()
+        const total = Number(d.total) || 0
+        setSavedWages(total)
+        if (total > 0) setManualWages(total.toFixed(2))
+        else setManualWages('')
+      }
     } catch(e) {}
 
     setLoading(false)
@@ -161,20 +162,22 @@ export default function IncomeStatementPage() {
     const amount = Number(manualWages)
     if (!amount) return toast.error('Enter wage amount')
     setSavingWages(true)
-    // Delete existing wage entries for this period then insert new
-    await supabase.from('manual_expenses')
-      .delete()
-      .eq('category','__labor_wages__')
-      .gte('expense_date', startDate)
-      .lte('expense_date', endDate)
-    await supabase.from('manual_expenses').insert({
-      category: '__labor_wages__',
-      amount,
-      expense_date: startDate,
-      notes: `Labor wages ${startDate} to ${endDate}`
-    })
-    setSavedWages(amount)
-    toast.success('Wages saved!')
+    try {
+      const res = await fetch('/api/labor-wages', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_date: startDate, end_date: endDate, amount }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast.error(json.error || 'Save failed')
+      } else {
+        setSavedWages(amount)
+        toast.success('Wages saved!')
+      }
+    } catch (e: any) {
+      toast.error(e?.message || 'Save failed')
+    }
     setSavingWages(false)
   }
 
@@ -200,13 +203,26 @@ export default function IncomeStatementPage() {
   }
 
   const saveMapping = async (appLocId: string, sqLocId: string) => {
-    await supabase.from('square_locations').upsert({
-      square_location_id: sqLocId,
-      square_name: squareLocations.find(l=>l.id===sqLocId)?.name || '',
-      app_location_id: appLocId
-    }, { onConflict: 'square_location_id' })
-    setSquareMapping(prev => ({ ...prev, [appLocId]: sqLocId }))
-    toast.success('Mapped!')
+    try {
+      const res = await fetch('/api/square-mapping', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          app_location_id: appLocId,
+          square_location_id: sqLocId,
+          square_name: squareLocations.find(l => l.id === sqLocId)?.name || '',
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast.error(json.error || 'Mapping failed')
+        return
+      }
+      setSquareMapping(prev => ({ ...prev, [appLocId]: sqLocId }))
+      toast.success('Mapped!')
+    } catch (e: any) {
+      toast.error(e?.message || 'Mapping failed')
+    }
   }
 
   // Calculations
@@ -268,6 +284,7 @@ export default function IncomeStatementPage() {
             </button>
           ))}
         </div>
+
         <div className="flex gap-2 flex-wrap">
           {PRESETS.map(p => (
             <button key={p.label} onClick={() => { const r=p.getRange(); setStartDate(r.start); setEndDate(r.end); setActivePreset(p.label) }}
@@ -276,6 +293,7 @@ export default function IncomeStatementPage() {
             </button>
           ))}
         </div>
+
         <div className="flex items-center gap-2 text-sm">
           <input type="date" value={startDate} onChange={e=>{setStartDate(e.target.value);setActivePreset('')}}
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
