@@ -52,18 +52,19 @@ export async function GET(req: NextRequest) {
   // ── SALES via Orders Search API ────────────────────────────────
   // Square's dashboard "Net Sales" = Gross Sales − Returns − Discounts
   // The Orders API gives us order.net_amounts which already excludes
-  // discounts and returns at the order level. So:
+  // BOTH discounts AND returns at the order level. So:
   //   netSales = sum(order.net_amounts.total_money)
   //            - sum(order.net_amounts.tip_money)
   //            - sum(order.net_amounts.tax_money)
-  //            - sum(refund.amount_money)
+  //            - sum(order.net_amounts.service_charge_money)
+  // (Do NOT subtract refunds — Square has already excluded them from net_amounts.
+  //  Subtracting refunds again double-counts the return.)
   if (action === 'sales') {
     const locationId = searchParams.get('square_location_id')
     if (!locationId || !startDate || !endDate)
       return NextResponse.json({ error: 'missing params' }, { status: 400 })
 
     try {
-      // Fetch ALL completed orders for this location in the date range
       let allOrders: any[] = []
       let cursor: string | undefined
       do {
@@ -89,55 +90,48 @@ export async function GET(req: NextRequest) {
         cursor = data.cursor
       } while (cursor)
 
-      // Aggregate
-      let grossOrderTotal = 0   // sum of net_amounts.total_money (excl returns/discounts at order level)
+      let grossOrderTotal = 0   // sum of net_amounts.total_money (already excludes returns + discounts)
       let tipTotal = 0
       let taxTotal = 0
       let serviceChargeTotal = 0
-      let discountTotal = 0      // for visibility / display
-      let refunds = 0
+      let discountTotal = 0      // informational only
+      let refunds = 0            // informational only (don't subtract again)
       let processingFees = 0
       let orderCount = 0
 
       for (const order of allOrders) {
         orderCount++
-        grossOrderTotal     += m(order.net_amounts?.total_money)
-        tipTotal            += m(order.net_amounts?.tip_money)
-        taxTotal            += m(order.net_amounts?.tax_money)
-        serviceChargeTotal  += m(order.net_amounts?.service_charge_money)
-        discountTotal       += m(order.total_discount_money) // already excluded from net_amounts; just for reporting
+        grossOrderTotal    += m(order.net_amounts?.total_money)
+        tipTotal           += m(order.net_amounts?.tip_money)
+        taxTotal           += m(order.net_amounts?.tax_money)
+        serviceChargeTotal += m(order.net_amounts?.service_charge_money)
+        discountTotal      += m(order.total_discount_money)
 
-        // Refunds attached to this order
+        // Refunds tracked for reporting/display only, NOT subtracted from netSales
         for (const refund of order.refunds || []) {
           if (refund.status === 'COMPLETED' || refund.status === 'APPROVED') {
             refunds += m(refund.amount_money)
           }
         }
 
-        // Processing fees (also embedded in order.tenders[].processing_fee_money on some accounts)
         for (const tender of order.tenders || []) {
           processingFees += m(tender.processing_fee_money)
         }
       }
 
-      // Square dashboard "Net Sales" math:
-      //   net_amounts.total_money = subtotal + tax + tip + service charges (already excludes discounts/returns)
-      //   → strip tax, tip, service charges to get the business income
-      //   → subtract refunds (returns)
-      const netSales = grossOrderTotal - tipTotal - taxTotal - serviceChargeTotal - refunds
-
-      // For display, also expose "gross sales" the way Square shows it
-      // (pre-refund subtotal of items, excluding tax/tip/service)
-      const grossSales = grossOrderTotal - tipTotal - taxTotal - serviceChargeTotal
+      // ✅ MATCHES SQUARE DASHBOARD NET SALES
+      const netSales = grossOrderTotal - tipTotal - taxTotal - serviceChargeTotal
+      // Pre-discount, pre-refund "Gross Sales" line on Square's report
+      const grossSales = netSales // (same number since refunds aren't added back here)
 
       return NextResponse.json({
-        grossSales,       // before refunds, after discounts
-        netSales,         // after refunds, after discounts, no tax/tip/service
+        grossSales,
+        netSales,
         tipTotal,
         taxTotal,
         discountTotal,
         serviceChargeTotal,
-        refunds,
+        refunds,         // returned but NOT subtracted from netSales
         processingFees,
         orderCount,
         debug: {
@@ -182,11 +176,8 @@ export async function GET(req: NextRequest) {
 
       for (const payout of payoutsRes.payouts || []) {
         totalPayoutAmount += m(payout.amount_money)
-
         const entriesRes = await squareFetch(`/payouts/${payout.id}/payout-entries?limit=200`)
-
         let payoutCapital = 0
-
         for (const entry of entriesRes.payout_entries || []) {
           if (entry.type === 'SQUARE_CAPITAL_PAYMENT') {
             capitalEntries++
