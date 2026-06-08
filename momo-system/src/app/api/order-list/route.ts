@@ -150,14 +150,22 @@ export async function GET(req: NextRequest) {
     .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit,sort_order,buffer_pct')
     .order('sort_order')
 
-  // Build a set of overhead ingredient codes for quick lookup
-  const overheadCodes = new Set(
-    (ingData || []).filter(i => i.is_overhead).map(i => i.code)
-  )
+  // ── Overhead items: seed needs at exactly 1 vendor unit (conv_factor) so they
+  //    always appear in the order list. The truck-low trigger below adds more on
+  //    top if any truck is running low. The user can adjust on-hand as usual and
+  //    the Buy qty will update accordingly.
+  for (const ing of ingData || []) {
+    if (!ing.is_overhead) continue
+    const conv = Number(ing.conv_factor) || 1
+    // Only seed if not already set by FIXED_STOCK or recipe
+    if (needs[ing.code] == null) {
+      needs[ing.code] = conv  // 1 vendor unit worth of recipe units
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   // ── Truck-low trigger: when a truck package runs low, bump the matching
-  //    ingredient's need on Newport's order list. Skip overhead items — they
-  //    are managed by the packaging/truck reorder rules, not the order list.
+  //    ingredient's need on Newport's order list.
   const { data: allTruckData } = await sb
     .from('truck_inventory')
     .select('quantity, delivery_received, packages!inner(code)')
@@ -166,7 +174,6 @@ export async function GET(req: NextRequest) {
     const pkgCode = (row.packages as any)?.code
     const ingCode = PACKAGE_TO_INGREDIENT[pkgCode]
     if (!ingCode) continue
-    if (overheadCodes.has(ingCode)) continue  // overhead — skip
     const total = (Number(row.quantity) || 0) + (Number(row.delivery_received) || 0)
     if (total <= 0.5) {
       needs[ingCode] = (needs[ingCode] ?? 0) + 1
@@ -191,16 +198,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const allLines = calcOrderLines(needs, inventoryMap, meta)
-
-  // Filter out overhead ingredients — they are managed by truck reorder rules
-  const lines = allLines.filter((l: any) => !overheadCodes.has(l.code))
-
+  const lines = calcOrderLines(needs, inventoryMap, meta)
   const priceMap = await buildPriceMap(sb, ingData || [])
 
   return NextResponse.json({
     lines,
-    ingredients: (ingData || []).filter(i => !i.is_overhead),
+    ingredients: ingData,
     priceMap,
     orders,
     summerRampUp,
