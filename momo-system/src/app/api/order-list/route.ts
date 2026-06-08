@@ -4,25 +4,18 @@ export const fetchCache = 'force-no-store'
 import { createServerClient, getConfig, getRecipeMap, getWeeklyOrders } from '@/lib/supabase'
 import { calcIngredientNeeds, calcOrderLines } from '@/lib/calculations'
 
-// Map of truck packages → the ingredient Newport actually orders for each.
-// When a truck runs low on a package (e.g. ST-1-BOWLS), we bump the need for
-// the corresponding ingredient (MOB) on Newport's vendor order list.
-//
-// The order list never shows "ST-xxx" rows — only ingredients. The truck's
-// package inventory just tells us which ingredients need restocking.
 const PACKAGE_TO_INGREDIENT: Record<string, string> = {
-  'ST-1-BOWLS': 'MOB',   // Momo Bowls
-  'ST-1-ALUM':  'ALUM',  // Aluminum Foil
-  'ST-2-CUPS':  'CUP',   // 2oz Sauce Cups
-  'ST-2-LIDS':  'LID',   // 2oz Sauce Lids
-  'ST-3-FORKS': 'FORK',  // Forks
-  'ST-4-SPOONS':'SPOON', // Spoons
-  'ST-4-JHOL':  'JHBWL', // Jhol Bowls
-  'ST-5-JLID':  'JHBLD', // Jhol Bowl Lids
-  'ST-BAGS':    'BAG',   // Brown Bags
-  'ST-NAP':     'NAP',   // Napkins
-  'ST-6-GLOVE': 'GLOVE', // Vinyl Gloves
-  // ST-7-FILM (Plastic Film) has no corresponding ingredient yet — add one if you want it tracked
+  'ST-1-BOWLS': 'MOB',
+  'ST-1-ALUM':  'ALUM',
+  'ST-2-CUPS':  'CUP',
+  'ST-2-LIDS':  'LID',
+  'ST-3-FORKS': 'FORK',
+  'ST-4-SPOONS':'SPOON',
+  'ST-4-JHOL':  'JHBWL',
+  'ST-5-JLID':  'JHBLD',
+  'ST-BAGS':    'BAG',
+  'ST-NAP':     'NAP',
+  'ST-6-GLOVE': 'GLOVE',
 }
 
 const FIXED_STOCK: Record<string, number> = {
@@ -41,11 +34,9 @@ const FIXED_STOCK: Record<string, number> = {
 
 const PIECES_PER_BATCH = 440
 const WEEKLY_MOMO_TARGET = 4400
-const TARGET_BATCHES = WEEKLY_MOMO_TARGET / PIECES_PER_BATCH // 10
+const TARGET_BATCHES = WEEKLY_MOMO_TARGET / PIECES_PER_BATCH
 const MOMOS_PER_PLATE = 10
 
-// For every ingredient, find the most recent unit_price from receipt_line_items.
-// Falls back to ingredients.current_unit_cost (manual entry) if no matched receipt.
 async function buildPriceMap(
   sb: ReturnType<typeof createServerClient>,
   ingredients: Array<{ id: string; code: string; name: string; current_unit_cost: number | null }>
@@ -154,9 +145,19 @@ export async function GET(req: NextRequest) {
     needs[code] = minQty
   }
 
+  // NOTE: added `buffer_pct` to the select so the page can show & edit it inline
+  const { data: ingData } = await sb.from('ingredients')
+    .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit,sort_order,buffer_pct')
+    .order('sort_order')
+
+  // Build a set of overhead ingredient codes for quick lookup
+  const overheadCodes = new Set(
+    (ingData || []).filter(i => i.is_overhead).map(i => i.code)
+  )
+
   // ── Truck-low trigger: when a truck package runs low, bump the matching
-  //    ingredient's need on Newport's order list. The order list never shows
-  //    ST-codes — only ingredients, which is what Newport actually buys.
+  //    ingredient's need on Newport's order list. Skip overhead items — they
+  //    are managed by the packaging/truck reorder rules, not the order list.
   const { data: allTruckData } = await sb
     .from('truck_inventory')
     .select('quantity, delivery_received, packages!inner(code)')
@@ -164,7 +165,8 @@ export async function GET(req: NextRequest) {
   for (const row of allTruckData || []) {
     const pkgCode = (row.packages as any)?.code
     const ingCode = PACKAGE_TO_INGREDIENT[pkgCode]
-    if (!ingCode) continue // package isn't mapped to an ingredient, skip
+    if (!ingCode) continue
+    if (overheadCodes.has(ingCode)) continue  // overhead — skip
     const total = (Number(row.quantity) || 0) + (Number(row.delivery_received) || 0)
     if (total <= 0.5) {
       needs[ingCode] = (needs[ingCode] ?? 0) + 1
@@ -181,11 +183,6 @@ export async function GET(req: NextRequest) {
     if (code) inventoryMap[code] = Number(row.quantity_on_hand)
   }
 
-  // NOTE: added `buffer_pct` to the select so the page can show & edit it inline
-  const { data: ingData } = await sb.from('ingredients')
-    .select('id,code,name,category,recipe_unit,conv_factor,min_order_qty,vendor_unit_desc,is_overhead,current_unit_cost,cost_per_recipe_unit,sort_order,buffer_pct')
-    .order('sort_order')
-
   const meta: Record<string,{convFactor:number;minOrderQty:number}> = {}
   for (const ing of ingData||[]) {
     meta[ing.code] = {
@@ -194,12 +191,16 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const lines = calcOrderLines(needs, inventoryMap, meta)
+  const allLines = calcOrderLines(needs, inventoryMap, meta)
+
+  // Filter out overhead ingredients — they are managed by truck reorder rules
+  const lines = allLines.filter((l: any) => !overheadCodes.has(l.code))
+
   const priceMap = await buildPriceMap(sb, ingData || [])
 
   return NextResponse.json({
     lines,
-    ingredients: ingData,
+    ingredients: (ingData || []).filter(i => !i.is_overhead),
     priceMap,
     orders,
     summerRampUp,
