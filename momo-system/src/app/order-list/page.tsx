@@ -38,20 +38,15 @@ export default function OrderListPage() {
   const [overallNotes, setOverallNotes] = useState('')
   const [expanded, setExpanded] = useState<Record<string,boolean>>({})
 
-  // Shop status now lives in the DB and syncs across devices
   const [shopStatus, setShopStatus] = useState<Record<string, ShopStatus>>({})
 
-  // Per-item buffer overrides — applied locally as soon as user saves so the
-  // row recalculates immediately without waiting for a full refetch.
   const [bufferOverrides, setBufferOverrides] = useState<Record<string, number>>({})
   const [editingBuffer, setEditingBuffer] = useState<string | null>(null)
   const [bufferDraft, setBufferDraft] = useState<string>('')
   const bufferInputRef = useRef<HTMLInputElement>(null)
 
-  // Price editing state
   const [editingPrice, setEditingPrice] = useState<string | null>(null)
   const [priceDraft, setPriceDraft] = useState<string>('')
-  // Local override for prices just saved (shown immediately, cleared on refetch)
   const [priceOverrides, setPriceOverrides] = useState<Record<string, PriceEntry>>({})
   const priceInputRef = useRef<HTMLInputElement>(null)
 
@@ -69,7 +64,6 @@ export default function OrderListPage() {
     }
   }, [editingBuffer])
 
-  // ── Shop status (DB-synced) ──────────────────────────────────────────────
   const loadShopStatus = useCallback(async (week: string) => {
     try {
       const res = await fetch(`/api/shop-status?week_start=${week}`, { cache: 'no-store' })
@@ -84,7 +78,6 @@ export default function OrderListPage() {
   useEffect(() => { loadShopStatus(weekStart) }, [weekStart, loadShopStatus])
 
   const setItemStatus = async (code: string, status: ShopStatus) => {
-    // Optimistic update
     const prev = shopStatus
     const next = { ...shopStatus }
     if (status === null) delete next[code]
@@ -97,7 +90,7 @@ export default function OrderListPage() {
         body: JSON.stringify({ week_start: weekStart, ingredient_code: code, status }),
       })
       if (!res.ok) {
-        setShopStatus(prev) // rollback
+        setShopStatus(prev)
         const j = await res.json().catch(() => ({}))
         toast.error(j.error || 'Save failed — others won\'t see this')
       }
@@ -106,7 +99,6 @@ export default function OrderListPage() {
       toast.error(e?.message || 'Network error')
     }
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   const load = useCallback(async () => {
     if (!weekStart) return
@@ -251,7 +243,6 @@ export default function OrderListPage() {
     toast.success('Notes saved')
   }
 
-  // Save manual price for a single item (inline edit)
   const savePriceFor = async (code: string, rawValue: string) => {
     const trimmed = rawValue.trim()
     const value: number | null = trimmed === '' ? null : Number(trimmed)
@@ -280,7 +271,6 @@ export default function OrderListPage() {
     }
   }
 
-  // Save per-item buffer% (inline edit) — uses existing PUT /api/ingredients
   const saveBufferFor = async (code: string, rawValue: string) => {
     const trimmed = rawValue.trim()
     if (trimmed === '') { setEditingBuffer(null); setBufferDraft(''); return }
@@ -308,7 +298,6 @@ export default function OrderListPage() {
     }
   }
 
-  // Per-item buffer lookup: local override → server value from ingredients table → 0 fallback
   const getBufferPct = (code: string, ing?: any): number => {
     if (bufferOverrides[code] != null) return bufferOverrides[code]
     const fromServer = ing?.buffer_pct
@@ -316,7 +305,6 @@ export default function OrderListPage() {
     return 0
   }
 
-  // calcUnitsToBuy: applies per-item buffer (replaces old global Newport buffer)
   const calcUnitsToBuy = (line: any, meta: Record<string, any>) => {
     const needed = Number(line.needed) || 0
     const conv = Number(line.convFactor) || 1
@@ -337,7 +325,6 @@ export default function OrderListPage() {
 
   const priceMap: Record<string, PriceEntry> = data?.priceMap || {}
 
-  // Unified lookup: session override → receipts/manual from server
   const getPriceEntry = (code: string): PriceEntry | null => {
     if (priceOverrides[code]) return priceOverrides[code]
     return priceMap[code] || null
@@ -424,7 +411,6 @@ export default function OrderListPage() {
     return 'bg-red-50'
   }
 
-  // Price cell renderer — handles view, edit, and missing
   const renderPriceBlock = (line: any) => {
     const entry = getPriceEntry(line.code)
     const unitPrice = entry?.unit_price ?? null
@@ -486,7 +472,6 @@ export default function OrderListPage() {
     )
   }
 
-  // Buffer cell renderer — inline editable percentage
   const renderBufferBlock = (line: any) => {
     const pct = getBufferPct(line.code, ingMeta[line.code])
     const isEditing = editingBuffer === line.code
@@ -714,6 +699,8 @@ export default function OrderListPage() {
                       const netNeeded = Math.max(0, needed - currentOnHand)
                       const unitsToBuy = calcUnitsToBuy(line, ingMeta)
                       const bufferPct = getBufferPct(line.code, ing)
+                      const bufferedNeeded = needed * (1 + bufferPct / 100)
+                      const bufferedNetNeeded = Math.max(0, bufferedNeeded - currentOnHand)
                       const status = shopStatus[line.code]
                       const displayName = ing?.name || line.code
 
@@ -723,7 +710,10 @@ export default function OrderListPage() {
                             <div className="min-w-0 flex-1">
                               <div className="text-sm font-medium text-gray-800 truncate">{displayName}</div>
                               <div className="text-xs text-gray-400">
-                                {line.code} · needed: {needed.toFixed(1)} {ing?.recipe_unit || ''}
+                                {line.code} · needed: {bufferedNeeded.toFixed(1)} {ing?.recipe_unit || ''}
+                                {bufferPct > 0 && (
+                                  <span className="text-gray-300 ml-1">(raw: {needed.toFixed(1)})</span>
+                                )}
                               </div>
                             </div>
                             {unitsToBuy > 0 && (
@@ -754,8 +744,8 @@ export default function OrderListPage() {
                               </span>
                             </div>
                             {renderBufferBlock(line)}
-                            {netNeeded > 0 && (
-                              <span className="text-xs text-gray-500">need {netNeeded.toFixed(1)} {ing?.recipe_unit} more</span>
+                            {bufferedNetNeeded > 0 && (
+                              <span className="text-xs text-gray-500">need {bufferedNetNeeded.toFixed(1)} {ing?.recipe_unit} more</span>
                             )}
                             {unitsToBuy > 0 && (
                               <div className="flex items-center gap-1.5 ml-auto">
