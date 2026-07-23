@@ -24,10 +24,11 @@ export function middleware(req: NextRequest) {
     if (!auth.username) throw new Error('invalid')
 
     // Truck staff can only access truck-inventory
-    if ((auth.role === 'lc_truck' || auth.role === 'salem_truck') &&
-        pathname !== '/truck-inventory' && pathname !== '/login') {
-      return NextResponse.redirect(new URL('/truck-inventory', req.url))
-    }
+   const truckAllowedPaths = ['/truck-inventory', '/packaging', '/login']
+if ((auth.role === 'lc_truck' || auth.role === 'salem_truck') &&
+    !truckAllowedPaths.includes(pathname)) {
+  return NextResponse.redirect(new URL('/truck-inventory', req.url))
+}
     return NextResponse.next()
   } catch {
     // Legacy string password format
