@@ -579,6 +579,11 @@ function ManualEntryForm({ receipt, ingredients, onSaved }: {
         <AlertCircle className="w-3.5 h-3.5" />
         OCR could not read this receipt — enter the details manually
       </p>
+      {receipt.notes && (
+        <p className="text-xs text-amber-600 bg-amber-100/60 rounded-lg px-2.5 py-1.5 font-mono break-all">
+          {receipt.notes}
+        </p>
+      )}
 
       {/* Vendor / Date / Total */}
       <div className="grid grid-cols-3 gap-3">
