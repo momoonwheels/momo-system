@@ -40,6 +40,12 @@ export async function POST(req: NextRequest) {
   const ingList = (ingredients||[]).map(i => `${i.code}: ${i.name} (${i.recipe_unit})`).join('\n')
 
   // OCR via Claude API
+  // NOTE: image_base64 MUST already be JPEG-encoded bytes by the time it reaches here.
+  // Claude's vision API rejects HEIC/other formats outright, and this media_type is
+  // NOT validated against the actual bytes — a mismatch here fails silently into the
+  // catch block below as a generic "OCR failed". The receipts upload page normalizes
+  // all uploads (including iPhone HEIC) to JPEG via canvas before calling this route.
+  // Any other caller of this endpoint must do the same.
   const imageContent: any = image_base64
     ? { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: image_base64 } }
     : { type: 'image', source: { type: 'url', url: image_url } }
@@ -76,9 +82,12 @@ Return ONLY valid JSON in this exact format, no other text:
     })
     const text = response.content[0].type === 'text' ? response.content[0].text : ''
     parsed = JSON.parse(text.replace(/```json|```/g,'').trim())
-  } catch (e) {
-    // OCR failed — return for manual entry
-    const { data } = await sb.from('receipts').insert({ status: 'reviewing', notes: 'OCR failed — manual entry required' }).select().single()
+  } catch (e: any) {
+    // OCR failed — log the real reason server-side so this is debuggable later,
+    // and store a short version of it on the receipt instead of a generic note.
+    console.error('Receipt OCR failed:', e?.message || e)
+    const reason = (e?.message || 'unknown error').slice(0, 200)
+    const { data } = await sb.from('receipts').insert({ status: 'reviewing', notes: `OCR failed — manual entry required (${reason})` }).select().single()
     return NextResponse.json({ ...data, ocr_failed: true })
   }
 
