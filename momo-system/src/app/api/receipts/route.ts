@@ -74,18 +74,24 @@ Return ONLY valid JSON in this exact format, no other text:
 }`
 
   let parsed: any = null
+  let rawText = ''
   try {
     const response = await anthropic.messages.create({
       model: 'claude-opus-4-6',
-      max_tokens: 2000,
+      // Was 2000 — too low for receipts with many line items, which caused
+      // the response to get cut off mid-JSON ("Unterminated string" errors).
+      // Raised to give room for long grocery-run receipts.
+      max_tokens: 8000,
       messages: [{ role: 'user', content: [imageContent, { type: 'text', text: prompt }] }]
     })
-    const text = response.content[0].type === 'text' ? response.content[0].text : ''
-    parsed = JSON.parse(text.replace(/```json|```/g,'').trim())
+    rawText = response.content[0].type === 'text' ? response.content[0].text : ''
+    parsed = JSON.parse(rawText.replace(/```json|```/g,'').trim())
   } catch (e: any) {
-    // OCR failed — log the real reason server-side so this is debuggable later,
-    // and store a short version of it on the receipt instead of a generic note.
+    // OCR failed — log the real reason AND the raw model output (truncated for
+    // log size) server-side so this is debuggable later, and store a short
+    // version of the error on the receipt instead of a generic note.
     console.error('Receipt OCR failed:', e?.message || e)
+    if (rawText) console.error('Raw OCR response (first 2000 chars):', rawText.slice(0, 2000))
     const reason = (e?.message || 'unknown error').slice(0, 200)
     const { data } = await sb.from('receipts').insert({ status: 'reviewing', notes: `OCR failed — manual entry required (${reason})` }).select().single()
     return NextResponse.json({ ...data, ocr_failed: true })
