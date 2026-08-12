@@ -31,13 +31,38 @@ export default function ReceiptsPage() {
 
   useEffect(() => { loadReceipts() }, [loadReceipts])
 
+  // Claude's vision API only accepts JPEG/PNG/GIF/WEBP — iPhone camera/photo library
+  // photos are HEIC by default, which the API rejects outright (causing "OCR failed").
+  // We normalize every upload to JPEG in-browser via canvas before sending it.
+  // Note: this relies on the browser being able to *display* the source format in an
+  // <img> — Safari/WebKit (iOS + macOS) can decode HEIC natively for this purpose, so
+  // this works for iPhone uploads without needing a server-side conversion library.
+  const fileToJpegBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file)
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { URL.revokeObjectURL(objectUrl); reject(new Error('canvas unsupported')); return }
+        ctx.drawImage(img, 0, 0)
+        URL.revokeObjectURL(objectUrl)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+        resolve(dataUrl.split(',')[1])
+      }
+      img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Could not read this image (unsupported format)')) }
+      img.src = objectUrl
+    })
+  }
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     setUploading(true)
-    const reader = new FileReader()
-    reader.onload = async (ev) => {
-      const base64 = (ev.target?.result as string).split(',')[1]
+    try {
+      const base64 = await fileToJpegBase64(file)
       const res = await fetch('/api/receipts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -46,11 +71,13 @@ export default function ReceiptsPage() {
       const data = await res.json()
       if (data.ocr_failed) toast.error('OCR failed — use manual entry below')
       else toast.success('Receipt processed! Review matches below.')
-      setUploading(false)
       loadReceipts()
       setTab('list')
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not read that photo — try again or use manual entry')
+    } finally {
+      setUploading(false)
     }
-    reader.readAsDataURL(file)
   }
 
   const updateLineMatch = async (lineId: string, ingredientId: string | null) => {
